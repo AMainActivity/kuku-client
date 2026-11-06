@@ -23,7 +23,7 @@ class AccountViewModel(private val repository: ProfileRepository, val transfers:
     fun avatar(id:String?) = action {
         val profile=requireNotNull(mutableMe.value)
         repository.usersUpdate(profile.version,profile.displayName,id)
-        mutableMe.value=repository.usersMe()
+        repository.usersMe()
     }
     fun avatarTransfer(job:dev.messenger.domain.model.TransferSnapshot,cancel:Boolean) = action {
         if(cancel) transfers.cancel(job.accountId,job.jobId) else transfers.resume(job.accountId,job.jobId)
@@ -52,13 +52,13 @@ class AccountViewModel(private val repository: ProfileRepository, val transfers:
     }
     fun clearCache() = action { sessions.state.value.account?.key?.let { transfers.clearDownloadCache(it) } }
     fun refresh() = action {
-        mutableMe.value = repository.usersMe()
+        repository.usersMe()
         mutableDevices.value = repository.sessionsList().items
     }
     fun profile(displayName: String) = action {
         val profile = requireNotNull(mutableMe.value)
         repository.usersUpdate(profile.version, displayName, profile.avatarId)
-        mutableMe.value = repository.usersMe()
+        repository.usersMe()
     }
     fun revoke(id: String) = action {
         repository.sessionsRevoke(id)
@@ -67,7 +67,7 @@ class AccountViewModel(private val repository: ProfileRepository, val transfers:
     fun setupMfa() = action { mutableEnrollment.value = repository.mfaSetup() }
     fun confirmMfa(code: String) = action {
         repository.mfaConfirm(code); mutableEnrollment.value = null
-        mutableMe.value = repository.usersMe()
+        repository.usersMe()
     }
     fun changeEmail(email: String) = action { mutableEmailChange.value = repository.emailChangeStart(email) }
     fun verifyEmail(oldCode: String, newCode: String, mfa: String) = action {

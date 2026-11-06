@@ -42,7 +42,7 @@ fun GroupScreen(accountKey:String,chatId:String,back:()->Unit,invite:(Boolean)->
     var editTitle by rememberSaveable {mutableStateOf("")}
     var editDescription by rememberSaveable {mutableStateOf("")}
     var menu by remember {mutableStateOf(false)}
-    var selected by remember {mutableStateOf<MemberInfo?>(null)}
+    var selectedId by remember {mutableStateOf<String?>(null)}
     var confirm by remember {mutableStateOf<Pair<String,()->Unit>?>(null)}
     var rankDialog by rememberSaveable {mutableStateOf(false)}
     var rank by rememberSaveable {mutableStateOf("")}
@@ -108,7 +108,7 @@ fun GroupScreen(accountKey:String,chatId:String,back:()->Unit,invite:(Boolean)->
                 }
                 items(members,key={it.userId}) {member ->
                     ListItem(headlineContent={Text(member.displayName)},supportingContent={Text(if(member.kind=="bot") stringResource(Res.string.bot) else role(member.role))},
-                        leadingContent={AvatarImage(null,member.displayName,44.dp)},modifier=Modifier.clickable {selected=member})
+                        leadingContent={AvatarImage(null,member.displayName,44.dp)},modifier=Modifier.clickable {selectedId=member.userId})
                 }
             }
             if(busy) item(key="loading") {Box(Modifier.fillMaxWidth(),contentAlignment=Alignment.Center) {CircularProgressIndicator(Modifier.size(24.dp))}}
@@ -122,20 +122,20 @@ fun GroupScreen(accountKey:String,chatId:String,back:()->Unit,invite:(Boolean)->
         AvatarUploadActions(jobs,value.avatarId,busy,model::avatar,model::avatarTransfer)
     }},confirmButton={Action(Res.string.save,!busy && editTitle.isNotBlank()) {model.update(editTitle,editDescription);editing=false}},dismissButton={Action(Res.string.cancel,!busy) {editing=false}})
     if(rankDialog && value!=null) AlertDialog(onDismissRequest={rankDialog=false},title={Text(stringResource(Res.string.pin_order))},text={Field(rank,{rank=it.filter(Char::isDigit).take(4)},Res.string.pin_order)},confirmButton={Action(Res.string.save,!busy && rank.toIntOrNull()!=null) {model.preferences(true,value.preferences.muted,rank.toIntOrNull() ?: 0);rankDialog=false}},dismissButton={Action(Res.string.cancel) {rankDialog=false}})
-    selected?.let {member ->
-        AlertDialog(onDismissRequest={selected=null},title={Text(member.displayName)},text={Column {
+    members.firstOrNull { it.userId == selectedId }?.let {member ->
+        AlertDialog(onDismissRequest={selectedId=null},title={Text(member.displayName)},text={Column {
             Text(if(member.kind=="bot") stringResource(Res.string.bot) else role(member.role))
-            if(member.userId!=accountKey.substringAfter(':')) Action(Res.string.write_message,!busy) {selected=null;model.direct(member.userId,openChat)}
+            if(member.userId!=accountKey.substringAfter(':')) Action(Res.string.write_message,!busy) {selectedId=null;model.direct(member.userId,openChat)}
             if(manage && member.userId!=accountKey.substringAfter(':')) {
-                Action(Res.string.remove_member,!busy) {selected=null;confirm=member.displayName to {model.member(if(member.kind=="bot") MemberAction.REMOVE_BOT else MemberAction.REMOVE,member.userId)}}
-                Action(Res.string.ban_member,!busy) {selected=null;confirm=member.displayName to {model.member(MemberAction.BAN,member.userId)}}
-                Action(Res.string.unban_member,!busy) {model.member(MemberAction.UNBAN,member.userId);selected=null}
+                Action(Res.string.remove_member,!busy) {selectedId=null;confirm=member.displayName to {model.member(if(member.kind=="bot") MemberAction.REMOVE_BOT else MemberAction.REMOVE,member.userId)}}
+                Action(Res.string.ban_member,!busy) {selectedId=null;confirm=member.displayName to {model.member(MemberAction.BAN,member.userId)}}
+                Action(Res.string.unban_member,!busy) {model.member(MemberAction.UNBAN,member.userId);selectedId=null}
                 if(value?.membership?.role=="owner" && member.kind!="bot") {
-                    Action(if(member.role=="admin") Res.string.make_member else Res.string.make_admin,!busy) {model.role(member.userId,if(member.role=="admin") "member" else "admin");selected=null}
-                    Action(Res.string.transfer_owner,!busy) {selected=null;confirm=member.displayName to {model.member(MemberAction.TRANSFER_OWNER,member.userId)}}
+                    Action(if(member.role=="admin") Res.string.make_member else Res.string.make_admin,!busy) {model.role(member.userId,if(member.role=="admin") "member" else "admin");selectedId=null}
+                    Action(Res.string.transfer_owner,!busy) {selectedId=null;confirm=member.displayName to {model.member(MemberAction.TRANSFER_OWNER,member.userId)}}
                 }
             }
-        }},confirmButton={Action(Res.string.back) {selected=null}})
+        }},confirmButton={Action(Res.string.back) {selectedId=null}})
     }
     confirm?.let {action -> AlertDialog(onDismissRequest={confirm=null},title={Text(stringResource(Res.string.confirm_action))},text={Text(action.first)},confirmButton={Action(Res.string.confirm,!busy) {confirm=null;action.second()}},dismissButton={Action(Res.string.cancel) {confirm=null}})}
 }

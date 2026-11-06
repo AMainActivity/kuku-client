@@ -10,8 +10,6 @@ import kotlinx.coroutines.flow.*
 internal class DefaultMessagingRepository(private val source:ConversationRepository,catalog:ChatCatalog,private val commands:RepositoryCommands):MessagingRepository,ChatCatalog by catalog {
     override val error=source.error
     override val historyGeneration=source.historyGeneration
-    override fun members(key:String,chatId:String)=source.members(key,chatId).map {it.map {row -> row.toModel()}}
-    override suspend fun loadMembers(key:String,chatId:String)=applicationCall {source.loadMembers(key,chatId)}
     override suspend fun initialUnreadCursor(key:String,chatId:String)=applicationCall {source.initialUnreadCursor(key,chatId)}
     override fun observeHistoryWindow(key:String,chatId:String,lower:Long,upper:Long?,limit:Int)=source.observeHistoryWindow(key,chatId,lower,upper,limit).map {it.map {row -> row.toModel()}}
     override suspend fun historyPage(key:String,chatId:String,direction:String,anchor:Long?,limit:Int)=applicationCall {source.historyPage(key,chatId,direction,anchor,limit).toModel()}

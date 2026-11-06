@@ -125,16 +125,54 @@ class ConversationRepository(
         requireAccount(key)
         mutableSyncing.value = true
         try {
+            repairCachedProfiles(key)
             if (dao.syncState(key) == null) catalog(key)
             try { replay(key) }
             catch (error: RemoteFailure) {
                 if (error.code != "RESYNC_REQUIRED") throw error
                 catalog(key)
+                repairCachedProfiles(key, force = true)
                 replay(key)
                 resyncGeneration.value += 1
             }
             dao.finishCatalog(key)
         } finally { mutableSyncing.value = false }
+    }
+
+    /** Old clients acknowledged profile events without applying them. Repair only unversioned cached users. */
+    private suspend fun repairCachedProfiles(key: String, force: Boolean = false) {
+        val members = dao.cachedMembers(key)
+        val peers = dao.cachedChats(key).mapNotNull { wireJson.decodeFromString<Chat>(it.json).peer?.userId }
+        val own = dao.ownProfile(key)?.let { wireJson.decodeFromString<Me>(it.json).userId }
+        val missing = (members.map { it.userId } + peers + listOfNotNull(own)).distinct()
+            .filter { force || dao.userProfile(key, it) == null }
+        if (missing.isEmpty()) return
+        // Reconcile old membership snapshots too, before recording repaired user versions.
+        for (chatId in members.filter { it.userId in missing }.map { it.chatId }.distinct()) {
+            try {
+                val chat = sessions.request(Commands.ChatsGet, ChatParams(chatId))
+                val snapshot = if (chat.membership.status == "active") fetchMembers(key, chatId) else emptyList()
+                val profiles = resolveMemberProfiles(key, snapshot)
+                requireAccount(key)
+                dao.replaceMembers(key, chatId, snapshot, profiles)
+                dao.cacheChat(key, chat)
+            } catch (failure: RemoteFailure) {
+                if (failure.code != "CHAT_UNAVAILABLE") throw failure
+                requireAccount(key)
+                dao.revoke(key, chatId)
+            }
+        }
+        for (userId in missing) {
+            if (userId == key.substringAfter(':')) {
+                val me = sessions.request(MoreCommands.UsersMe, EmptyParams())
+                requireAccount(key)
+                dao.cacheMe(key, me)
+            } else {
+                val user = sessions.request(MoreCommands.UsersGet, DirectParams(userId))
+                requireAccount(key)
+                dao.cacheUser(key, user)
+            }
+        }
     }
 
     private suspend fun catalog(key: String) {
@@ -157,7 +195,7 @@ class ConversationRepository(
             val page = sessions.request(Commands.SyncPull, SyncParams(cursor))
             val changed = linkedSetOf<String>()
             val revoked = linkedSetOf<String>()
-            val receiptChats = linkedSetOf<String>()
+            val memberChats = linkedSetOf<String>()
             val messages = mutableListOf<Message>()
             for (event in page.items) {
                 val chatId = event.data["chatId"]?.jsonPrimitive?.contentOrNull
@@ -166,7 +204,7 @@ class ConversationRepository(
                     event.type == "receipt.updated" -> {
                         val receipt = wireJson.decodeFromJsonElement<ReceiptUpdate>(event.data)
                         if (receipt.kind in setOf("read", "delivered")) {
-                            if (dao.member(key, receipt.chatId, receipt.userId) == null) receiptChats.add(receipt.chatId)
+                            if (dao.member(key, receipt.chatId, receipt.userId) == null) memberChats.add(receipt.chatId)
                             if (receipt.userId == key.substringAfter(':') && receipt.kind == "read") changed.add(receipt.chatId)
                         }
                     }
@@ -175,7 +213,10 @@ class ConversationRepository(
                         val message = wireJson.decodeFromJsonElement<Message>(event.data)
                         messages.add(message); changed.add(message.chatId)
                     }
-                    chatId != null -> changed.add(chatId)
+                    chatId != null -> {
+                        changed.add(chatId)
+                        if (event.type in setOf("group.membershipChanged", "group.invited", "chat.created")) memberChats.add(chatId)
+                    }
                 }
             }
             val chats = mutableListOf<Chat>()
@@ -186,13 +227,24 @@ class ConversationRepository(
                 }
             }
             requireAccount(key)
-            for (chatId in receiptChats - revoked) {
-                try { loadMembers(key, chatId) }
+            val snapshots = mutableMapOf<String, List<MemberInfo>>()
+            for (chatId in memberChats - revoked) {
+                // Invitees may see the group but cannot list its members until accepting.
+                if (chats.firstOrNull { it.chatId == chatId }?.membership?.status == "invited") {
+                    snapshots[chatId] = emptyList()
+                    continue
+                }
+                try { snapshots[chatId] = fetchMembers(key, chatId) }
                 catch (failure: RemoteFailure) {
                     if (failure.code == "CHAT_UNAVAILABLE") revoked.add(chatId) else throw failure
                 }
             }
-            dao.applyPage(key, cursor, page, chats, messages, revoked)
+            val profiles = resolveMemberProfiles(key, snapshots.values.flatten())
+            val ownChanged = page.items.any { it.type == "user.updated" &&
+                it.data["userId"]?.jsonPrimitive?.contentOrNull == key.substringAfter(':') }
+            val me = if (ownChanged) sessions.request(MoreCommands.UsersMe, EmptyParams()) else null
+            requireAccount(key)
+            dao.applyPage(key, cursor, page, chats, messages, revoked, snapshots, me, profiles)
             // ACK is deliberately after the completed Room transaction, including unknown events.
             val channel = sessions.connection()
             if (acknowledgedChannel !== channel || acknowledgedCursor != page.nextCursor) {
@@ -253,15 +305,41 @@ class ConversationRepository(
     }
     suspend fun loadMembers(key:String,chatId:String) {
         requireAccount(key)
-        var cursor:String?=null
-        val seen=mutableSetOf<String>()
+        val expectedRevision = dao.memberRevision(key, chatId)
+        val members = fetchMembers(key, chatId)
+        val profiles = resolveMemberProfiles(key, members)
+        requireAccount(key)
+        dao.cacheMemberResponse(key, chatId, members, expectedRevision, complete = true, profiles = profiles)
+    }
+    /**
+     * MemberInfo has a membership version, but no profile version. A mismatching name may
+     * be either a stale list response or a rename made while we shared no active chat.
+     * Resolve that ambiguity with a versioned users.get; never guess from membership.version.
+     */
+    private suspend fun resolveMemberProfiles(key: String, members: List<MemberInfo>): List<User> {
+        val profiles = mutableListOf<User>()
+        for ((userId, snapshots) in members.groupBy { it.userId }) {
+            val cached = dao.userProfile(key, userId)?.let { wireJson.decodeFromString<User>(it.json) } ?: continue
+            if (snapshots.any { cached.displayName != it.displayName || cached.kind != it.kind || cached.handle != it.handle }) {
+                profiles += sessions.request(MoreCommands.UsersGet, DirectParams(userId))
+                requireAccount(key)
+            }
+        }
+        return profiles
+    }
+
+    private suspend fun fetchMembers(key: String, chatId: String): List<MemberInfo> {
+        val members = mutableListOf<MemberInfo>()
+        var cursor: String? = null
+        val seen = mutableSetOf<String>()
         do {
-            val page=sessions.request(MoreCommands.MembersList,ChatPageParams(chatId,cursor,100))
+            val page = sessions.request(MoreCommands.MembersList, ChatPageParams(chatId, cursor, 100))
             requireAccount(key)
-            dao.cacheMembers(page.items.map { MemberCacheEntity(key,chatId,it.userId,wireJson.encodeToString(it)) })
-            cursor=page.nextCursor
-            if(cursor!=null) check(seen.add(cursor))
-        } while(cursor!=null)
+            members += page.items
+            cursor = page.nextCursor
+            if (cursor != null && !seen.add(cursor)) throw ProtocolFailure("MEMBER_CURSOR_LOOP")
+        } while (cursor != null)
+        return members
     }
     fun chats(key: String): Flow<List<Chat>> = dao.observeChats(key).map { rows -> rows.map { wireJson.decodeFromString<Chat>(it.json) } }
     fun chat(key: String, chatId: String): Flow<Chat?> = dao.observeChat(key, chatId).map { it?.let { wireJson.decodeFromString<Chat>(it.json) } }
@@ -337,13 +415,25 @@ class ConversationRepository(
             if(existing!=null) Uuid.parse(existing.operationId)
             else (operationId ?: Uuid.random()).also { dao.rememberMutation(MutationEntity(key,requestKey,it.toString())) }
         } else operationId
+        val memberRequest = params as? ChatPageParams
+        val cachesMembers = command.name == "groups.members.list" || command.name == "receipts.list"
+        val expectedRevision = if (cachesMembers && memberRequest != null) dao.memberRevision(key, memberRequest.chatId) else 0
         val result = sessions.request(command, params, stableId)
         requireAccount(key)
         when (result) {
-            is Me -> database.profiles().put(AccountProfileEntity(key,wireJson.encodeToString<Me>(result)))
+            is Me -> dao.cacheMe(key, result)
+            is User -> dao.cacheUser(key, result)
             is Chat -> dao.cacheChat(key, result)
             is Message -> dao.cacheMessages(key, listOf(result))
             is Items<*> -> dao.cacheMessages(key, result.items.filterIsInstance<Message>())
+            is Page<*> -> if (cachesMembers && memberRequest != null) {
+                val members = result.items.filterIsInstance<MemberInfo>()
+                val profiles = resolveMemberProfiles(key, members)
+                requireAccount(key)
+                dao.cacheMemberResponse(key, memberRequest.chatId, members, expectedRevision,
+                    complete = memberRequest.cursor == null && result.nextCursor == null && memberRequest.query.isEmpty(),
+                    profiles = profiles)
+            }
         }
         // A late response may only acknowledge its own journal entry, never a newer operation.
         if(requestKey!=null) dao.forgetMutation(key,requestKey,requireNotNull(stableId).toString())

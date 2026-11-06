@@ -23,8 +23,6 @@ class ChatViewModel(val accountKey: String, val chatId: String,
     private var shareJob:Job?=null
     private val mutableScrollTarget = MutableStateFlow<String?>(null)
     val scrollTarget = mutableScrollTarget.asStateFlow()
-    private val mutableReceipts = MutableStateFlow<List<MemberInfo>>(emptyList())
-    val receipts = mutableReceipts.asStateFlow()
     val connection = repository.connection
     val syncError = repository.error
     val chat = repository.chat(accountKey, chatId).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
@@ -33,6 +31,7 @@ class ChatViewModel(val accountKey: String, val chatId: String,
         if(id==null) null else try {transfers.avatarBytes(accountKey,id)} catch(cancelled:CancellationException){throw cancelled} catch(_:Exception){null}
     }.stateIn(viewModelScope,SharingStarted.WhileSubscribed(5000),null)
     val members = repository.members(accountKey,chatId).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val receipts = members
     private val historyWindow=HistoryWindow(repository,accountKey,chatId)
     val history = historyWindow.history.stateIn(viewModelScope, SharingStarted.WhileSubscribed(0), emptyList())
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -216,13 +215,7 @@ class ChatViewModel(val accountKey: String, val chatId: String,
     fun finishJump(messageId:String) {if(mutableScrollTarget.value==messageId) mutableScrollTarget.value=null}
     fun loadReceipts() { viewModelScope.launch {
         try {
-            val result=mutableListOf<MemberInfo>(); var cursor:String?=null; val seen=mutableSetOf<String>()
-            do {
-                val page=repository.receiptsList(chatId,cursor,100)
-                result+=page.items; cursor=page.nextCursor
-                if(cursor!=null) check(seen.add(cursor))
-            } while(cursor!=null)
-            mutableReceipts.value=result
+            repository.loadMembers(accountKey, chatId)
         } catch(cancelled:CancellationException) { throw cancelled }
         catch(failure:Exception) { mutableError.value=failureCode(failure) }
     } }

@@ -54,6 +54,8 @@ interface ChatCatalog {
     val connection:StateFlow<SessionState>
     fun chats(key:String):Flow<List<Chat>>
     fun chat(key:String,chatId:String):Flow<Chat?>
+    fun members(key:String,chatId:String):Flow<List<MemberInfo>>
+    suspend fun loadMembers(key:String,chatId:String)
     suspend fun synchronize()
     suspend fun newDirect(userId:String):Chat
     suspend fun preferencesSet(chatId: String, expectedVersion: Long, pinned: Boolean, pinRank: Int = 0, muted: Boolean):Unit
@@ -119,8 +121,6 @@ interface DirectoryRepository:ChatCatalog,DirectoryCatalog,GroupCreation {
 interface MessagingRepository:ChatCatalog {
     val error:StateFlow<String?>
     val historyGeneration:StateFlow<Long>
-    fun members(key:String,chatId:String):Flow<List<MemberInfo>>
-    suspend fun loadMembers(key:String,chatId:String)
     suspend fun initialUnreadCursor(key:String,chatId:String):Long?
     fun observeHistoryWindow(key:String,chatId:String,lower:Long,upper:Long?,limit:Int):Flow<List<Message>>
     suspend fun historyPage(key:String,chatId:String,direction:String,anchor:Long?,limit:Int=50):History

@@ -31,19 +31,18 @@ class GroupViewModel(val accountKey: String, val chatId: String, private val rep
         if(id==null) null else try { transfers.avatarBytes(accountKey,id) }
         catch(cancelled:CancellationException) { throw cancelled } catch(_:Exception) { null }
     }.stateIn(viewModelScope,SharingStarted.WhileSubscribed(5000),null)
-    private val mutableMembers = MutableStateFlow<List<MemberInfo>>(emptyList())
-    val members = mutableMembers.asStateFlow()
+    val members = repository.members(accountKey, chatId)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     private val mutableHasMore = MutableStateFlow(false)
     val hasMore = mutableHasMore.asStateFlow()
     private var cursor: String? = null
 
     fun refresh(more: Boolean = false) = action {
         val value=repository.chatsGet(chatId)
-        if(value.kind!="group") {mutableMembers.value=emptyList();mutableHasMore.value=false;return@action}
+        if(value.kind!="group" || value.membership.status!="active") {mutableHasMore.value=false;return@action}
         if (!more) cursor = null
         val page = repository.membersList(chatId,cursor)
         if(more && page.nextCursor!=null && page.nextCursor==cursor) throw ApplicationFailure("MEMBER_CURSOR_LOOP")
-        mutableMembers.value = ((if(more) mutableMembers.value else emptyList()) + page.items).distinctBy { it.userId }
         cursor = page.nextCursor; mutableHasMore.value = cursor != null
     }
     fun update(title: String, description: String) = action {
@@ -58,16 +57,16 @@ class GroupViewModel(val accountKey: String, val chatId: String, private val rep
     fun leave(done: ()->Unit) = action { repository.groupLeave(chatId); repository.synchronize(); done() }
     fun member(command: MemberAction, userId: String) = action {
         repository.changeMember(command,chatId,userId)
-        repository.membersList(chatId).also {page -> mutableMembers.value=page.items;cursor=page.nextCursor;mutableHasMore.value=cursor!=null}
+        repository.synchronize()
         repository.chatsGet(chatId)
     }
     fun role(userId: String, role: String) = action {
         repository.groupRole(chatId,userId,role)
-        repository.membersList(chatId).also {page -> mutableMembers.value=page.items;cursor=page.nextCursor;mutableHasMore.value=cursor!=null}
+        repository.synchronize()
     }
     fun block(userId: String, blocked: Boolean) = action {
         (if (blocked) repository.userBlock(userId) else repository.userUnblock(userId))
     }
-    fun receipts() = action { mutableMembers.value = repository.receiptsList(chatId).items }
+
 }
 

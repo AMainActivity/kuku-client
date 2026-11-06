@@ -25,11 +25,99 @@ data class ReceiptEntity(val accountId:String,val chatId:String,val kind:String,
 @Entity(tableName="members_cache",primaryKeys=["accountId","chatId","userId"])
 data class MemberCacheEntity(val accountId:String,val chatId:String,val userId:String,val json:String)
 
+/** Changes only when a complete membership snapshot replaces the cache, or access is revoked. */
+@Entity(tableName = "member_cache_revisions", primaryKeys = ["accountId", "chatId"])
+data class MemberCacheRevisionEntity(val accountId: String, val chatId: String, val revision: Long)
+
 @Entity(tableName="mutation_journal",primaryKeys=["accountId","requestKey"])
 data class MutationEntity(val accountId:String,val requestKey:String,val operationId:String)
 
+/** User versions and membership versions belong to different server records. */
+@Entity(tableName = "user_profiles", primaryKeys = ["accountId", "userId"])
+data class UserProfileEntity(val accountId: String, val userId: String, val json: String)
+
 @Dao
 abstract class ConversationsDao {
+    @Query("SELECT revision FROM member_cache_revisions WHERE accountId=:accountId AND chatId=:chatId")
+    protected abstract suspend fun storedMemberRevision(accountId: String, chatId: String): Long?
+    open suspend fun memberRevision(accountId: String, chatId: String): Long =
+        storedMemberRevision(accountId, chatId) ?: 0
+    @Upsert protected abstract suspend fun putMemberRevision(row: MemberCacheRevisionEntity)
+    @Query("DELETE FROM member_cache_revisions WHERE accountId=:accountId")
+    protected abstract suspend fun clearMemberRevisions(accountId: String)
+    protected suspend fun advanceMemberRevision(accountId: String, chatId: String) {
+        putMemberRevision(MemberCacheRevisionEntity(accountId, chatId, memberRevision(accountId, chatId) + 1))
+    }
+    @Query("SELECT * FROM user_profiles WHERE accountId=:accountId AND userId=:userId")
+    abstract suspend fun userProfile(accountId: String, userId: String): UserProfileEntity?
+    @Upsert protected abstract suspend fun putUserProfile(row: UserProfileEntity)
+    @Query("DELETE FROM user_profiles WHERE accountId=:accountId")
+    protected abstract suspend fun clearUserProfiles(accountId: String)
+    @Query("SELECT * FROM account_profiles WHERE accountId=:accountId")
+    abstract suspend fun ownProfile(accountId: String): AccountProfileEntity?
+    @Upsert protected abstract suspend fun putOwnProfile(row: AccountProfileEntity)
+    @Query("SELECT * FROM chats WHERE accountId=:accountId")
+    abstract suspend fun cachedChats(accountId: String): List<ChatEntity>
+    @Query("SELECT * FROM members_cache WHERE accountId=:accountId")
+    abstract suspend fun cachedMembers(accountId: String): List<MemberCacheEntity>
+    @Query("SELECT * FROM members_cache WHERE accountId=:accountId AND userId=:userId")
+    protected abstract suspend fun userMemberships(accountId: String, userId: String): List<MemberCacheEntity>
+    @Query("DELETE FROM members_cache WHERE accountId=:accountId AND chatId=:chatId")
+    protected abstract suspend fun removeMembers(accountId: String, chatId: String)
+    @Query("DELETE FROM members_cache WHERE accountId=:accountId AND chatId=:chatId AND userId NOT IN (:userIds)")
+    protected abstract suspend fun removeAbsentMembers(accountId: String, chatId: String, userIds: List<String>)
+
+    @Transaction
+    open suspend fun cacheUser(accountId: String, incoming: User): User {
+        val old = userProfile(accountId, incoming.userId)?.let { wireJson.decodeFromString<User>(it.json) }
+        val user = if (old != null && old.version > incoming.version) old else incoming
+        if (old == user) return user
+        putUserProfile(UserProfileEntity(accountId, user.userId, wireJson.encodeToString(user)))
+        for (row in cachedChats(accountId)) {
+            val chat = wireJson.decodeFromString<Chat>(row.json)
+            if (chat.peer?.userId == user.userId) {
+                putChat(row.copy(json = wireJson.encodeToString(chat.withPeer(user))))
+            }
+        }
+        putMembers(userMemberships(accountId, user.userId).map { row ->
+            val member = wireJson.decodeFromString<MemberInfo>(row.json).withUser(user)
+            row.copy(json = wireJson.encodeToString(member))
+        })
+        ownProfile(accountId)?.let { row ->
+            val me = wireJson.decodeFromString<Me>(row.json)
+            if (me.userId == user.userId && user.version >= me.version) {
+                putOwnProfile(row.copy(json = wireJson.encodeToString(me.withUser(user))))
+            }
+        }
+        return user
+    }
+
+    @Transaction
+    open suspend fun cacheMe(accountId: String, incoming: Me) {
+        val old = ownProfile(accountId)?.let { wireJson.decodeFromString<Me>(it.json) }
+        val me = if (old != null && old.version > incoming.version) old else incoming
+        val user = cacheUser(accountId, User(me.userId, me.displayName, me.kind, me.handle,
+            me.description, me.avatarId, me.version, me.deleted))
+        putOwnProfile(AccountProfileEntity(accountId, wireJson.encodeToString(me.withUser(user))))
+    }
+
+    @Transaction
+    open suspend fun replaceMembers(accountId: String, chatId: String, items: List<MemberInfo>, profiles: List<User> = emptyList()) {
+        profiles.forEach { cacheUser(accountId, it) }
+        cacheMembers(items.map { MemberCacheEntity(accountId, chatId, it.userId, wireJson.encodeToString(it)) })
+        removeAbsentMembers(accountId, chatId, items.map { it.userId })
+        advanceMemberRevision(accountId, chatId)
+    }
+
+    /** Ignore only responses superseded by a complete snapshot or revocation of this chat. */
+    @Transaction
+    open suspend fun cacheMemberResponse(accountId: String, chatId: String, items: List<MemberInfo>,
+        expectedRevision: Long, complete: Boolean, profiles: List<User> = emptyList()) {
+        if (memberRevision(accountId, chatId) != expectedRevision) return
+        profiles.forEach { cacheUser(accountId, it) }
+        if (complete) replaceMembers(accountId, chatId, items)
+        else cacheMembers(items.map { MemberCacheEntity(accountId, chatId, it.userId, wireJson.encodeToString(it)) })
+    }
     @Query("SELECT * FROM mutation_journal WHERE accountId=:accountId AND requestKey=:requestKey")
     abstract suspend fun mutation(accountId:String,requestKey:String):MutationEntity?
     @Insert abstract suspend fun rememberMutation(value:MutationEntity)
@@ -48,12 +136,11 @@ abstract class ConversationsDao {
             incoming.map {row ->
                 val old=existing[row.userId]?.let {wireJson.decodeFromString<MemberInfo>(it.json)}
                 val fresh=wireJson.decodeFromString<MemberInfo>(row.json)
-                if(old==null) row else {
-                    val info=(if(old.version>fresh.version) old else fresh).copy(
-                        deliveredSeq=maxOf(old.deliveredSeq,fresh.deliveredSeq),
-                        readSeq=maxOf(old.readSeq,fresh.readSeq))
-                    row.copy(json=wireJson.encodeToString(info))
-                }
+                val merged = if (old == null) fresh else (if (old.version > fresh.version) old else fresh).copy(
+                    deliveredSeq = maxOf(old.deliveredSeq, fresh.deliveredSeq),
+                    readSeq = maxOf(old.readSeq, fresh.readSeq))
+                val profile = userProfile(row.accountId, row.userId)?.let { wireJson.decodeFromString<User>(it.json) }
+                row.copy(json = wireJson.encodeToString(if (profile == null) merged else merged.withUser(profile)))
             }
         }
         putMembers(merged)
@@ -143,7 +230,7 @@ abstract class ConversationsDao {
     open suspend fun cacheChat(accountId: String, chat: Chat, generation: String? = null) {
         pruneBeforeJoin(accountId,chat.chatId,chat.membership.joinedSeq)
         val stamp = generation ?: syncState(accountId)?.generation ?: ""
-        putChat(ChatEntity(accountId, chat.chatId, wireJson.encodeToString(chat),
+        putChat(ChatEntity(accountId, chat.chatId, wireJson.encodeToString(chat.peer?.let { chat.withPeer(cacheUser(accountId, it)) } ?: chat),
             chat.preferences.pinned, chat.preferences.pinRank, chat.lastMessage?.createdAt.orEmpty(), stamp))
         chat.lastMessage?.let { cacheMessages(accountId, listOf(it)) }
     }
@@ -163,11 +250,14 @@ abstract class ConversationsDao {
     open suspend fun revoke(accountId: String, chatId: String) {
         removeChat(accountId, chatId)
         removeHistory(accountId, chatId)
+        removeMembers(accountId, chatId)
+        advanceMemberRevision(accountId, chatId)
         failChatPending(accountId, chatId)
     }
     @Transaction
     open suspend fun applyPage(accountId: String, expectedCursor: Long, page: SyncPage,
-        chats: List<Chat>, messages: List<Message>, revoked: Set<String>) {
+        chats: List<Chat>, messages: List<Message>, revoked: Set<String>,
+        memberSnapshots: Map<String, List<MemberInfo>> = emptyMap(), me: Me? = null, profiles: List<User> = emptyList()) {
         val state = requireNotNull(syncState(accountId))
         require(state.cursor == expectedCursor)
         require(page.nextCursor >= expectedCursor)
@@ -175,6 +265,12 @@ abstract class ConversationsDao {
         require(page.items.zipWithNext().all { (a,b) -> a.cursor < b.cursor })
         require(page.items.lastOrNull()?.cursor?.let { it == page.nextCursor } ?: (page.nextCursor == expectedCursor))
         chats.filterNot { it.chatId in revoked }.forEach { cacheChat(accountId, it) }
+        for (event in page.items.filter { it.type == "user.updated" }) {
+            cacheUser(accountId, wireJson.decodeFromJsonElement<User>(event.data))
+        }
+        profiles.forEach { cacheUser(accountId, it) }
+        me?.let { cacheMe(accountId, it) }
+        memberSnapshots.filterKeys { it !in revoked }.forEach { (chatId, items) -> replaceMembers(accountId, chatId, items) }
         cacheMessages(accountId, messages.filterNot { it.chatId in revoked })
         messages.filterNot { it.chatId in revoked }.groupBy { it.chatId }.forEach { (chatId,items) -> advanceReceipt(accountId,chatId,"delivered",items.maxOf { it.seq }) }
         for (event in page.items.filter { it.type == "receipt.updated" }) {
@@ -204,7 +300,17 @@ abstract class ConversationsDao {
         clearChats(accountId); clearHistory(accountId); clearSync(accountId); clearEvents(accountId)
         clearMutations(accountId)
         clearMembers(accountId)
+        clearMemberRevisions(accountId)
+        clearUserProfiles(accountId)
         clearReceipts(accountId)
         clearDrafts(accountId); clearOutbox(accountId); clearStage(accountId)
     }
 }
+
+private fun Chat.withPeer(user: User) = Chat(chatId, kind, title, description, avatarId, version,
+    membership, lastMessage, unreadCount, user, preferences)
+
+private fun MemberInfo.withUser(user: User) = copy(displayName = user.displayName, kind = user.kind, handle = user.handle)
+
+private fun Me.withUser(user: User) = copy(displayName = user.displayName, kind = user.kind, handle = user.handle,
+    description = user.description, avatarId = user.avatarId, version = user.version, deleted = user.deleted)

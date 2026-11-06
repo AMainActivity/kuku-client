@@ -14,6 +14,8 @@ internal class DefaultChatCatalog(private val source:ConversationRepository, ses
     override val connection=session.state
     override fun chats(key:String)=source.chats(key).map {it.map {row -> row.toModel()}}
     override fun chat(key:String,chatId:String)=source.chat(key,chatId).map {it?.toModel()}
+    override fun members(key:String,chatId:String)=source.members(key,chatId).map {it.map {row -> row.toModel()}}
+    override suspend fun loadMembers(key:String,chatId:String)=applicationCall {source.loadMembers(key,chatId)}
     override suspend fun synchronize()=applicationCall {source.synchronize()}
     override suspend fun newDirect(userId:String)=applicationCall {source.newDirect(userId).toModel()}
     override suspend fun preferencesSet(chatId: String, expectedVersion: Long, pinned: Boolean, pinRank: Int, muted: Boolean):Unit {  commands.execute(MoreCommands.PreferencesSet,PreferenceParams(chatId,expectedVersion,pinned,pinRank,muted)); }
