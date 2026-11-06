@@ -46,12 +46,18 @@ fun AboutScreen(back: () -> Unit, licenses: () -> Unit) {
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.semantics { heading() },
                         )
-                        Text(stringResource(release.title), style = MaterialTheme.typography.titleSmall)
-                        release.changes.forEach { change ->
-                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Text("•", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(stringResource(change), modifier = Modifier.weight(1f),
-                                    style = MaterialTheme.typography.bodyMedium)
+                        release.sections.filter { it.changes.isNotEmpty() }.forEach { section ->
+                            Text(
+                                stringResource(section.title),
+                                style = MaterialTheme.typography.titleSmall,
+                                modifier = Modifier.padding(top = 8.dp).semantics { heading() },
+                            )
+                            section.changes.forEach { change ->
+                                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    Text("•", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(stringResource(change), modifier = Modifier.weight(1f),
+                                        style = MaterialTheme.typography.bodyMedium)
+                                }
                             }
                         }
                     }

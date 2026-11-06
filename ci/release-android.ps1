@@ -6,7 +6,7 @@ $ErrorActionPreference = 'Stop'
 $required = @('RELEASE_KEYSTORE_BASE64', 'RELEASE_STORE_PASSWORD', 'RELEASE_KEY_ALIAS', 'RELEASE_KEY_PASSWORD')
 foreach ($name in $required) {
     if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
-        throw "Missing GitHub Actions secret: $name. See README release setup."
+        throw "Missing GitHub Actions secret: $name. Configure the required repository Actions secrets."
     }
 }
 if ([string]::IsNullOrWhiteSpace($env:RUNNER_TEMP)) { throw 'This script requires a GitHub Actions runner.' }
@@ -19,6 +19,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Release requires an existing Git tag.' }
     $headCommit = & git rev-parse HEAD
     if ($LASTEXITCODE -ne 0 -or $headCommit -ne $tagCommit) { throw 'Checkout does not match the release tag.' }
+    $notesPath = Join-Path (Get-Location) "release-notes/$version.md"
+    if (!(Test-Path -LiteralPath $notesPath)) { throw "Missing release notes for $Tag." }
+    $releaseNotes = [IO.File]::ReadAllText($notesPath).Trim()
+    if ([string]::IsNullOrWhiteSpace($releaseNotes)) { throw "Release notes for $Tag are empty." }
     try { $keyBytes = [Convert]::FromBase64String($env:RELEASE_KEYSTORE_BASE64) }
     catch { throw 'RELEASE_KEYSTORE_BASE64 must contain a Base64-encoded keystore.' }
     [IO.File]::WriteAllBytes($keyPath, $keyBytes)
@@ -53,7 +57,7 @@ try {
         "$hash  $name"
     }
     [IO.File]::WriteAllLines((Join-Path $output 'SHA256SUMS.txt'), $checksums)
-    $notes = @("Android $version (versionCode $VersionCode).", '', "Commit: $headCommit", '',
+    $notes = @($releaseNotes, '', '---', '', "Android $version (versionCode $VersionCode).", '', "Commit: $headCommit", '',
         'Signed APK for direct installation; AAB for store upload.',
         'Client host tests and release lint passed. Private server-contract tests were not run.',
         'This release workflow does not verify iOS or device scenarios.')

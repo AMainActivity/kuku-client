@@ -132,7 +132,7 @@
 <string name="theme_system">Системная</string>
 <string name="clear_cache">Очистить скачанные файлы</string>
 <string name="cache_explanation">История, черновики и исходящие файлы сохраняются. Вложение можно скачать заново.</string>
-<string name="about_version">Куку! 0.1.0 · Частный сервер</string>
+<string name="about_version">Куку! 0.1.1 · Частный сервер</string>
 <string name="change_avatar">Выбрать аватар</string>
 <string name="remove_avatar">Удалить аватар</string>
 <string name="apply_avatar">Установить аватар</string>
@@ -154,7 +154,7 @@
     <string name="service_stopping">Остановка фоновой службы…</string>
     <string name="profile_loading">Профиль</string>
     <string name="background_connection">Связь в фоне</string>
-    <string name="app_version">Версия 0.1.0</string>
+    <string name="app_version">Версия 0.1.1</string>
     <string name="service_starting">Запуск фоновой службы…</string>
     <string name="about_app">О приложении</string>
     <string name="about_description">Куку! — мессенджер для вашего сервера.</string>
@@ -215,6 +215,15 @@
     <string name="latest_messages">К последним сообщениям</string>
     <string name="changelog_title">История изменений</string>
     <string name="changelog_version">Версия %1$s</string>
+    <string name="changelog_added">Добавлено</string>
+    <string name="changelog_changed">Изменено</string>
+    <string name="changelog_fixed">Исправлено</string>
+    <string name="changelog_011_profiles">Имена и аватары обновляются без перезахода в чат. Ранее устаревшие профили сверяются с сервером.</string>
+    <string name="changelog_011_groups">Состав и роли группы, а также отметки прочтения обновляются на открытых экранах.</string>
+    <string name="changelog_011_limits">При ограничениях сервера запросы ожидают без отключения чата и потери сообщений в очереди.</string>
+    <string name="changelog_011_keyboard">Исправлено положение поля сообщения при открытии клавиатуры Android.</string>
+    <string name="changelog_011_admin">Администрирование сервера запрашивает код аутентификатора при необходимости и повторяет подтверждённое действие.</string>
+    <string name="changelog_011_about">В разделе «О приложении» добавлены история изменений и просмотр лицензий библиотек.</string>
     <string name="changelog_initial_release">Первый выпуск</string>
     <string name="changelog_010_chats">Личные и групповые чаты, ответы, редактирование и удаление сообщений.</string>
     <string name="changelog_010_attachments">Фото, видео, аудио и документы с просмотром вложений.</string>

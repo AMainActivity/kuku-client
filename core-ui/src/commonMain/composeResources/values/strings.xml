@@ -132,7 +132,7 @@
 <string name="theme_system">System</string>
 <string name="clear_cache">Clear downloaded files</string>
 <string name="cache_explanation">History, drafts and outgoing files are kept. Open an attachment to download it again.</string>
-<string name="about_version">Kuku! 0.1.0 · Private server</string>
+<string name="about_version">Kuku! 0.1.1 · Private server</string>
 <string name="change_avatar">Choose avatar</string>
 <string name="remove_avatar">Remove avatar</string>
 <string name="apply_avatar">Use this avatar</string>
@@ -154,7 +154,7 @@
     <string name="service_stopping">Stopping background service…</string>
     <string name="profile_loading">Profile</string>
     <string name="background_connection">Background connection</string>
-    <string name="app_version">Version 0.1.0</string>
+    <string name="app_version">Version 0.1.1</string>
     <string name="service_starting">Starting background service…</string>
     <string name="about_app">About</string>
     <string name="about_description">Kuku! — a messenger for your server.</string>
@@ -215,6 +215,15 @@
     <string name="latest_messages">Latest messages</string>
     <string name="changelog_title">What’s new</string>
     <string name="changelog_version">Version %1$s</string>
+    <string name="changelog_added">Added</string>
+    <string name="changelog_changed">Changed</string>
+    <string name="changelog_fixed">Fixed</string>
+    <string name="changelog_011_profiles">Names and avatars update without reopening the chat. Previously outdated profiles are refreshed.</string>
+    <string name="changelog_011_groups">Group members, roles and read receipts update live on open screens.</string>
+    <string name="changelog_011_limits">Server rate limits pause requests without disconnecting the chat or losing queued messages.</string>
+    <string name="changelog_011_keyboard">Fixed the message input position when opening the Android keyboard.</string>
+    <string name="changelog_011_admin">Server administration requests an authenticator code when needed and retries the confirmed action.</string>
+    <string name="changelog_011_about">Added release history and a library license viewer in About.</string>
     <string name="changelog_initial_release">First release</string>
     <string name="changelog_010_chats">Personal and group chats, replies, editing and deleting messages.</string>
     <string name="changelog_010_attachments">Photos, videos, audio and documents with attachment viewers.</string>
