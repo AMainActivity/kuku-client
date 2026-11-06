@@ -246,9 +246,19 @@ fun ConversationScreen(accountKey: String, chatId: String, back: () -> Unit, det
             items(pending.filterNot { it.operationId.value.toString() in known }.reversed(), key = { "pending-${it.operationId.value}" }) { item ->
                 MessageBubble(own=true) {
                         Text(item.text)
-                        Text(stringResource(if (item.state == OutboxState.FAILED) Res.string.send_failed else Res.string.pending))
-                        if (item.state == OutboxState.FAILED) TextButton(onClick = { model.retry(item.operationId.value.toString()) }) {
-                            Text(stringResource(Res.string.retry))
+                        Row(Modifier.align(Alignment.End),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(5.dp)) {
+                            Text(formatMessageTimestamp(kotlin.time.Instant.fromEpochMilliseconds(item.createdAtMillis).toString(),messageClock),
+                                style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                            if(item.state==OutboxState.FAILED) {
+                                val retryLabel=stringResource(Res.string.retry)
+                                Icon(painterResource(Res.drawable.message_failed),stringResource(Res.string.send_failed),
+                                    Modifier.size(18.dp).clickable(onClickLabel=retryLabel,role=androidx.compose.ui.semantics.Role.Button) {
+                                        model.retry(item.operationId.value.toString())
+                                    },tint=MaterialTheme.colorScheme.error)
+                            } else {
+                                Icon(painterResource(Res.drawable.message_pending),stringResource(Res.string.pending),
+                                    Modifier.size(18.dp),tint=MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                     }
             }

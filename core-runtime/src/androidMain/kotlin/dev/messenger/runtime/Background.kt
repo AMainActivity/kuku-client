@@ -23,6 +23,11 @@ class AndroidBackgroundConnection(context:Context):BackgroundConnection {
     override val state=AndroidRuntime.serviceState
     override fun retry()=AndroidRuntime.start(context)
     override fun notificationsEnabled()=AndroidRuntime.notificationsEnabled(context)
+    override fun messageSound()=MessageNotifications.sound(context)
+    override fun selectMessageSound(sound:dev.messenger.domain.MessageSound)=MessageNotifications.selectSound(context,sound)
+    override fun visibleConversation(account:String?,chatId:String?) {
+        MessageNotifications.visible.value=if(account!=null && chatId!=null) account to chatId else null
+    }
 }
 object AndroidRuntime {
     var container: AppRuntime? = null
@@ -49,14 +54,13 @@ object AndroidRuntime {
 
 }
 private const val CHANNEL = "messenger.background"
-private const val MESSAGES = "messenger.messages"
 private const val SERVICE_ID = 1001
 
 
 private fun channels(context: Context) {
     val manager=context.getSystemService(NotificationManager::class.java)
     manager.createNotificationChannel(NotificationChannel(CHANNEL,context.getString(R.string.bg_channel),NotificationManager.IMPORTANCE_LOW))
-    manager.createNotificationChannel(NotificationChannel(MESSAGES,context.getString(R.string.message_channel),NotificationManager.IMPORTANCE_DEFAULT))
+    MessageNotifications.ensureChannel(context)
 }
 private fun launchIntent(context:Context, key:String):PendingIntent {
     val intent=requireNotNull(context.packageManager.getLaunchIntentForPackage(context.packageName))
@@ -67,7 +71,7 @@ private fun launchIntent(context:Context, key:String):PendingIntent {
     if(parts.size==3) { intent.putExtra("notificationAccount",parts.take(2).joinToString(":"));intent.putExtra("notificationChat",parts[2]) }
     return PendingIntent.getActivity(context,key.hashCode(),intent,PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 }
-private suspend fun notifyUnread(context:Context,account:String, chats:List<dev.messenger.data.wire.Chat>) {
+internal suspend fun notifyUnread(context:Context,account:String, chats:List<dev.messenger.data.wire.Chat>,visible:Pair<String,String>?) {
     MessageNotifications.reconcile(context,account,chats.map { it.chatId }.toSet())
     if(Build.VERSION.SDK_INT>=33 && ContextCompat.checkSelfPermission(context,Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED) return
     channels(context)
@@ -77,12 +81,19 @@ private suspend fun notifyUnread(context:Context,account:String, chats:List<dev.
         val key=account+":"+chat.chatId
         if(chat.unreadCount==0L || chat.preferences.muted) { manager.cancel(key,1); continue }
         val last=chat.lastMessage ?: continue
+        if(visible==(account to chat.chatId)) {
+            manager.cancel(key,1)
+            preferences.edit().putString(key,last.messageId).apply()
+            continue
+        }
         if(preferences.getString(key,null)==last.messageId) continue
-        val notification=NotificationCompat.Builder(context,MESSAGES)
+        val notification=NotificationCompat.Builder(context,MessageNotifications.ensureChannel(context))
             .setSmallIcon(R.drawable.ic_notification_kuku)
             .setContentTitle(chat.title.ifBlank { chat.peer?.displayName.orEmpty() })
             .setContentText(context.getString(R.string.unread_count,chat.unreadCount))
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setSilent(MessageNotifications.sound(context)==dev.messenger.domain.MessageSound.SILENT ||
+                !MessageNotifications.alerts.allow(account,android.os.SystemClock.elapsedRealtime()))
             .setContentIntent(launchIntent(context,key)).setAutoCancel(true).build()
         manager.notify(key,1,notification)
         preferences.edit().putString(key,last.messageId).apply()
@@ -146,7 +157,8 @@ class MessagingForegroundService:Service() {
             runtime.sessions.state.map { it.loaded to it.account?.key }.distinctUntilChanged().collectLatest { (initialized,key) ->
                 if(!initialized) return@collectLatest
                 if(key==null) { MessageNotifications.reconcile(this@MessagingForegroundService,null,emptySet()); stopSelf(); return@collectLatest }
-                runtime.conversations.chats(key).collect { notifyUnread(this@MessagingForegroundService,key,it) }
+                combine(runtime.conversations.chats(key),MessageNotifications.visible) { chats,visible -> chats to visible }
+                    .collect { (chats,visible) -> notifyUnread(this@MessagingForegroundService,key,chats,visible) }
             }
         }
         return START_STICKY

@@ -21,7 +21,8 @@ import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.koinApplication
 import org.koin.dsl.module
 
-class AppContainer(private val store: LocalStore, private val network: MessengerNetwork, secureStore: SecureStore, files: ManagedFiles, val uiSettings:UiSettings, background:BackgroundConnection? = null, onAccountRemoved:(String)->Unit = {}) {
+class AppContainer(private val store: LocalStore, private val network: MessengerNetwork, secureStore: SecureStore, files: ManagedFiles, val uiSettings:UiSettings, private val background:BackgroundConnection? = null, onAccountRemoved:(String)->Unit = {}) {
+    fun visibleConversation(account:String?,chatId:String?) { background?.visibleConversation(account,chatId) }
     internal val importScope=CoroutineScope(SupervisorJob()+Dispatchers.Default)
     val shares=store.shares(files)
     val notificationTarget=kotlinx.coroutines.flow.MutableStateFlow<Pair<String,String>?>(null)

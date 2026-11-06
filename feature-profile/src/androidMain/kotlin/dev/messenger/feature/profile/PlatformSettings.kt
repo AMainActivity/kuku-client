@@ -9,6 +9,7 @@ import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -28,6 +29,7 @@ import org.jetbrains.compose.resources.stringResource
     val service by background.state.collectAsState()
     var autostart by remember { mutableStateOf(prefs.getBoolean("autostart",false)) }
     var notifications by remember { mutableStateOf(background.notificationsEnabled()) }
+    var sound by remember { mutableStateOf(background.messageSound()) }
     val lifecycle=LocalLifecycleOwner.current.lifecycle
     DisposableEffect(lifecycle) {
         fun refresh() { notifications=background.notificationsEnabled() }
@@ -35,6 +37,19 @@ import org.jetbrains.compose.resources.stringResource
         lifecycle.addObserver(observer);refresh()
         onDispose { lifecycle.removeObserver(observer) }
     }
+    Text(stringResource(Res.string.message_sound),style=MaterialTheme.typography.titleMedium)
+    MessageSound.entries.forEach { choice ->
+        Row(Modifier.fillMaxWidth().selectable(selected=sound==choice,role=androidx.compose.ui.semantics.Role.RadioButton,
+            onClick={background.selectMessageSound(choice);sound=choice}),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+            RadioButton(selected=sound==choice,onClick=null)
+            Text(stringResource(when(choice) {
+                MessageSound.CUCKOO->Res.string.message_sound_cuckoo
+                MessageSound.SYSTEM->Res.string.message_sound_system
+                MessageSound.SILENT->Res.string.message_sound_silent
+            }))
+        }
+    }
+    Text(stringResource(Res.string.message_sound_system_hint))
     Text(stringResource(Res.string.background_title),style=MaterialTheme.typography.titleMedium)
     Text(stringResource(Res.string.background_explanation))
     Text(stringResource(when(service.phase) {

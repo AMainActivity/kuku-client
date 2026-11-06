@@ -53,14 +53,27 @@ fun App(container: AppContainer) {
     KoinIsolatedContext(container.application) {
         
         val state by container.sessions.state.collectAsStateWithLifecycle()
+        val restoration by container.runtime.restoration.collectAsStateWithLifecycle()
         ConnectionHost(state.account != null,dark)
-        val stack = rememberNavBackStack(navigationConfig, ServerRoute)
-        LaunchedEffect(state.account?.key) {
-            if (state.account != null) {
-                if (stack.firstOrNull() != ChatsRoute) { stack.clear(); stack.add(ChatsRoute) }
-            } else if (stack.any { it == ChatsRoute || it is ConversationRoute }) {
-                stack.clear(); stack.add(ServerRoute)
+        if(!state.loaded) {
+            KukuTheme(dark) {
+                SessionStartup(restoration==SessionRestoration.FAILED) {container.setActive("ui",true)}
             }
+            return@KoinIsolatedContext
+        }
+        // An unresolved session must never create or reset a navigation stack.
+        // Account-scoped saved state cannot leak routes across login/logout.
+        key(state.account?.key) {
+        val stack = rememberNavBackStack(navigationConfig, if(state.account==null) ServerRoute else ChatsRoute)
+        val visibleChat=(stack.lastOrNull() as? ConversationRoute)?.chatId
+        DisposableEffect(container,lifecycle,state.account?.key,visibleChat) {
+            fun refresh() {
+                val resumed=lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
+                container.visibleConversation(if(resumed) state.account?.key else null,if(resumed) visibleChat else null)
+            }
+            val observer=androidx.lifecycle.LifecycleEventObserver { _,_ -> refresh() }
+            lifecycle.addObserver(observer);refresh()
+            onDispose {lifecycle.removeObserver(observer);container.visibleConversation(null,null)}
         }
         val notificationTarget by container.notificationTarget.collectAsStateWithLifecycle()
         LaunchedEffect(notificationTarget,state.loaded,state.account?.key) {
@@ -127,6 +140,7 @@ fun App(container: AppContainer) {
                 )
             }
         }
+    }
     }
     }
     }

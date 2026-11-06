@@ -237,4 +237,6 @@
     <string name="member_not_banned">Этот пользователь не заблокирован в группе.</string>
     <string name="unban_choose_person">Найдите пользователя, с которого нужно снять блокировку. Здесь показан каталог пользователей, а не список заблокированных.</string>
     <string name="unban_search_bots">Искать ботов</string>
+    <string name="message_sound">Звук сообщений</string><string name="message_sound_cuckoo">Куку!</string><string name="message_sound_system">Системный звук</string><string name="message_sound_silent">Без звука</string><string name="message_sound_system_hint">Системные настройки уведомлений Android имеют приоритет над выбранным звуком.</string>
+    <string name="session_restoring">Открываем Куку!…</string><string name="session_restore_failed">Не удалось прочитать сохранённую сессию. Попробуйте ещё раз.</string>
 </resources>
