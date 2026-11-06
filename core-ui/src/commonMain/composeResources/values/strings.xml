@@ -132,7 +132,7 @@
 <string name="theme_system">System</string>
 <string name="clear_cache">Clear downloaded files</string>
 <string name="cache_explanation">History, drafts and outgoing files are kept. Open an attachment to download it again.</string>
-<string name="about_version">Kuku! 0.1.1 · Private server</string>
+<string name="about_version">Kuku! 0.1.2 · Private server</string>
 <string name="change_avatar">Choose avatar</string>
 <string name="remove_avatar">Remove avatar</string>
 <string name="apply_avatar">Use this avatar</string>
@@ -154,7 +154,7 @@
     <string name="service_stopping">Stopping background service…</string>
     <string name="profile_loading">Profile</string>
     <string name="background_connection">Background connection</string>
-    <string name="app_version">Version 0.1.1</string>
+    <string name="app_version">Version 0.1.2</string>
     <string name="service_starting">Starting background service…</string>
     <string name="about_app">About</string>
     <string name="about_description">Kuku! — a messenger for your server.</string>
@@ -239,4 +239,14 @@
     <string name="unban_search_bots">Search bots</string>
     <string name="message_sound">Message sound</string><string name="message_sound_cuckoo">Kuku!</string><string name="message_sound_system">System sound</string><string name="message_sound_silent">Silent</string><string name="message_sound_system_hint">Android notification settings take priority over the selected sound.</string>
     <string name="session_restoring">Opening Kuku!…</string><string name="session_restore_failed">Could not read your saved session. Try again.</string>
+    <string name="changelog_012_sound">Added the Kuku! notification sound on Android, with system sound and silent options.</string>
+    <string name="changelog_012_unban">Find users and bots to remove their group ban.</string>
+    <string name="changelog_012_statuses">Message statuses appear as icons next to the time. Tap the error icon to retry sending.</string>
+    <string name="changelog_012_notifications">Open chats stay quiet; message bursts trigger at most one sound every five seconds.</string>
+    <string name="changelog_012_startup">Startup restores the local session before opening chats or sign-in, with retry on storage errors and no network wait.</string>
+    <string name="changelog_012_history">Fixed offline history display and positioning at unread messages. Delayed responses preserve your reading position.</string>
+    <string name="changelog_012_cache">Outdated responses no longer roll back chat data or restore chats after access is revoked.</string>
+    <string name="changelog_012_files">Fixed retries for damaged downloads and access to forwarded attachments; limited download response buffering.</string>
+    <string name="changelog_012_text">The server text size limit is checked before clearing the message input.</string>
+    <string name="changelog_012_email">Fixed authenticator code entry when changing email. Notifications are cleared after logout or loss of chat access.</string>
 </resources>

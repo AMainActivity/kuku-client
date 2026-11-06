@@ -17,6 +17,30 @@ internal data class ChangelogEntry(
 // Keep descriptions in both default and Russian resources when adding a release.
 internal val changelogEntries = listOf(
     ChangelogEntry(
+        version = "0.1.2",
+        sections = listOf(
+            ChangelogSection(
+                title = Res.string.changelog_added,
+                changes = listOf(Res.string.changelog_012_sound, Res.string.changelog_012_unban),
+            ),
+            ChangelogSection(
+                title = Res.string.changelog_changed,
+                changes = listOf(Res.string.changelog_012_statuses, Res.string.changelog_012_notifications),
+            ),
+            ChangelogSection(
+                title = Res.string.changelog_fixed,
+                changes = listOf(
+                    Res.string.changelog_012_startup,
+                    Res.string.changelog_012_history,
+                    Res.string.changelog_012_cache,
+                    Res.string.changelog_012_files,
+                    Res.string.changelog_012_text,
+                    Res.string.changelog_012_email,
+                ),
+            ),
+        ),
+    ),
+    ChangelogEntry(
         version = "0.1.1",
         sections = listOf(
             ChangelogSection(
