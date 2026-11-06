@@ -118,6 +118,8 @@ class ChatViewModel(val accountKey: String, val chatId: String,
     fun send() {
         val value = mutableText.value
         if (value.isBlank() && mutableSelectedFiles.value.isEmpty()) return
+        try { repository.validateText(value) }
+        catch (failure: ApplicationFailure) { mutableError.value=failure.code; return }
         mutableText.value = ""; edits.trySend(Edit.Send(value, mutableReply.value, mutableSelectedFiles.value)); mutableReply.value = null; mutableSelectedFiles.value = emptyList()
     }
     private var viewportJob:Job?=null
@@ -220,6 +222,7 @@ class ChatViewModel(val accountKey: String, val chatId: String,
         catch(failure:Exception) { mutableError.value=failureCode(failure) }
     } }
     fun read(through: Long) = mutate("read:$through") {
+        historyWindow.onVisibleMessagesRead(through)
         repository.read(accountKey,chatId,through)
     }
     override fun onCleared() { edits.close() }

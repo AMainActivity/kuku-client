@@ -29,6 +29,7 @@ kotlin {
             implementation(project(":shared-data"))
             implementation(libs.robolectric)
             implementation(libs.junit)
+            implementation(libs.coroutines.test)
         }
     }
 }

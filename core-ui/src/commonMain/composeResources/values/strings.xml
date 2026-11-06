@@ -232,4 +232,9 @@
     <string name="changelog_010_account">Email sign-in, profile settings and group management.</string>
     <string name="third_party_licenses">Libraries and licenses</string>
     <string name="admin_confirmation_description">Enter your authenticator code to continue this server administration action.</string>
+    <string name="message_too_large">The message exceeds the server text limit. Shorten it and try again.</string>
+    <string name="file_integrity_failed">The downloaded file is damaged. Retry to download it again.</string>
+    <string name="member_not_banned">This user is not banned from the group.</string>
+    <string name="unban_choose_person">Find the user to unban. This is the user directory, not a list of banned members.</string>
+    <string name="unban_search_bots">Search bots</string>
 </resources>

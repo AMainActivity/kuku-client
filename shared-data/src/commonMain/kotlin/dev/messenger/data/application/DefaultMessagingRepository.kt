@@ -8,10 +8,12 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
 internal class DefaultMessagingRepository(private val source:ConversationRepository,catalog:ChatCatalog,private val commands:RepositoryCommands):MessagingRepository,ChatCatalog by catalog {
+    override fun validateText(text:String)=source.validateTextSize(text)
     override val error=source.error
     override val historyGeneration=source.historyGeneration
     override suspend fun initialUnreadCursor(key:String,chatId:String)=applicationCall {source.initialUnreadCursor(key,chatId)}
     override fun observeHistoryWindow(key:String,chatId:String,lower:Long,upper:Long?,limit:Int)=source.observeHistoryWindow(key,chatId,lower,upper,limit).map {it.map {row -> row.toModel()}}
+    override suspend fun cachedHistoryPage(key:String,chatId:String,direction:String,anchor:Long?,limit:Int)=applicationCall {source.cachedHistoryPage(key,chatId,direction,anchor,limit).toModel()}
     override suspend fun historyPage(key:String,chatId:String,direction:String,anchor:Long?,limit:Int)=applicationCall {source.historyPage(key,chatId,direction,anchor,limit).toModel()}
     override fun replyTargets(key:String,chatId:String,ids:List<String>)=source.replyTargets(key,chatId,ids).map {it.mapValues {entry -> entry.value.toModel()}}
     override suspend fun messageSequence(key:String,chatId:String,messageId:String)=applicationCall {source.messageSequence(key,chatId,messageId)}

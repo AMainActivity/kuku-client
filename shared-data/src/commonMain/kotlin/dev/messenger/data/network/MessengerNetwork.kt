@@ -16,21 +16,22 @@ import io.ktor.utils.io.readBuffer
 /** Owns its HttpClient; callers own and close each returned RpcConnection. */
 class MessengerNetwork(private val client: HttpClient) {
     suspend fun discover(endpoint: ServerEndpoint): ServerInfo = withTimeout(CONNECT_TIMEOUT_MILLIS) {
-        val response = client.get("https://${endpoint.authority}/v1/server-info")
-        if (response.status.value != 200) {
-            response.bodyAsChannel().cancel(null)
-            throw ProtocolFailure("DISCOVERY_HTTP_ERROR")
+        client.prepareGet("https://${endpoint.authority}/v1/server-info").execute { response ->
+            if (response.status.value != 200) {
+                response.bodyAsChannel().cancel(null)
+                throw ProtocolFailure("DISCOVERY_HTTP_ERROR")
+            }
+            val channel = response.bodyAsChannel()
+            val bytes = try { channel.readBuffer(MAX_RECEIVE_BYTES.toLong() + 1).readByteArray() }
+                finally { channel.cancel(null) }
+            if (bytes.size > MAX_RECEIVE_BYTES) throw ProtocolFailure("FRAME_TOO_LARGE")
+            val info = try { wireJson.decodeFromString<ServerInfo>(bytes.decodeToString(throwOnInvalidSequence = true)) }
+                catch (_: Exception) { throw ProtocolFailure("INVALID_DISCOVERY") }
+            if (info.contractVersion != CONTRACT_VERSION || PROTOCOL_VERSION !in info.protocolVersions) {
+                throw ProtocolFailure("UNSUPPORTED_CONTRACT")
+            }
+            info
         }
-        val channel = response.bodyAsChannel()
-        val bytes = try { channel.readBuffer(MAX_RECEIVE_BYTES.toLong() + 1).readByteArray() }
-            finally { channel.cancel(null) }
-        if (bytes.size > MAX_RECEIVE_BYTES) throw ProtocolFailure("FRAME_TOO_LARGE")
-        val info = try { wireJson.decodeFromString<ServerInfo>(bytes.decodeToString(throwOnInvalidSequence = true)) }
-            catch (_: Exception) { throw ProtocolFailure("INVALID_DISCOVERY") }
-        if (info.contractVersion != CONTRACT_VERSION || PROTOCOL_VERSION !in info.protocolVersions) {
-            throw ProtocolFailure("UNSUPPORTED_CONTRACT")
-        }
-        info
     }
 
     suspend fun connect(
@@ -48,7 +49,8 @@ class MessengerNetwork(private val client: HttpClient) {
                 val hello = decodeIncoming(opened.receive() ?: throw ConnectionLost()) as? Incoming.Hello
                     ?: throw ProtocolFailure("HELLO_REQUIRED")
                 verifyServer(info, hello, expectedServerId)
-                RpcConnection(opened, owner, info.serverId,onFailure=::reportConnectionFailure)
+                RpcConnection(opened, owner, info.serverId,onFailure=::reportConnectionFailure,
+                    maxTextBytes=(info.limits["maxTextBytes"] ?: MAX_TEXT_BYTES).also { require(it in 1..MAX_TEXT_BYTES) })
             }
         } catch (error: Exception) {
             socket?.close()
@@ -58,31 +60,33 @@ class MessengerNetwork(private val client: HttpClient) {
 
     suspend fun putPart(authority: String, token: String, uploadId: String, number: Int, sha256: String, bytes: ByteArray) {
         uuid(uploadId)
-        val response = client.put("https://$authority/v1/files/$uploadId/parts/$number") {
+        client.preparePut("https://$authority/v1/files/$uploadId/parts/$number") {
             bearerAuth(token)
             header("X-Content-SHA256", sha256)
             header("Content-Type", "application/octet-stream")
             setBody(bytes)
             timeout { requestTimeoutMillis = 120_000 }
+        }.execute { response ->
+            response.bodyAsChannel().cancel(null)
+            if (response.status.value !in 200..299) throw FileHttpFailure(response.status.value)
         }
-        response.bodyAsChannel().cancel(null)
-        if (response.status.value !in 200..299) throw FileHttpFailure(response.status.value)
     }
     internal suspend fun downloadPart(authority: String, token: String, attachmentId: String, offset: Long, end: Long, etag: String?): DownloadPart {
         uuid(attachmentId)
-        val response = client.get("https://$authority/v1/files/$attachmentId") {
+        return client.prepareGet("https://$authority/v1/files/$attachmentId") {
             bearerAuth(token)
             header("Range", "bytes=$offset-$end")
             if (etag != null) header("If-Range", etag)
             timeout { requestTimeoutMillis = 120_000 }
+        }.execute { response ->
+            val channel = response.bodyAsChannel()
+            if(response.status.value !in setOf(200,206)) {
+                channel.cancel(null)
+                throw FileHttpFailure(response.status.value)
+            }
+            val bytes = try { channel.readBuffer(end - offset + 2).readByteArray() } finally { channel.cancel(null) }
+            DownloadPart(response.status.value, response.headers["ETag"], response.headers["Content-Range"], bytes)
         }
-        val channel = response.bodyAsChannel()
-        if(response.status.value !in setOf(200,206)) {
-            channel.cancel(null)
-            throw FileHttpFailure(response.status.value)
-        }
-        val bytes = try { channel.readBuffer(end - offset + 2).readByteArray() } finally { channel.cancel(null) }
-        return DownloadPart(response.status.value, response.headers["ETag"], response.headers["Content-Range"], bytes)
     }
 
     fun close() = client.close()

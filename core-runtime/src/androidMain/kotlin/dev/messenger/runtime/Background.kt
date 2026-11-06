@@ -67,10 +67,10 @@ private fun launchIntent(context:Context, key:String):PendingIntent {
     if(parts.size==3) { intent.putExtra("notificationAccount",parts.take(2).joinToString(":"));intent.putExtra("notificationChat",parts[2]) }
     return PendingIntent.getActivity(context,key.hashCode(),intent,PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
 }
-private suspend fun notifyUnread(context:Context,container:AppRuntime, chats:List<dev.messenger.data.wire.Chat>) {
+private suspend fun notifyUnread(context:Context,account:String, chats:List<dev.messenger.data.wire.Chat>) {
+    MessageNotifications.reconcile(context,account,chats.map { it.chatId }.toSet())
     if(Build.VERSION.SDK_INT>=33 && ContextCompat.checkSelfPermission(context,Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED) return
     channels(context)
-    val account=container.sessions.state.value.account?.key ?: return
     val preferences=context.getSharedPreferences("notification_markers",Context.MODE_PRIVATE)
     val manager=context.getSystemService(NotificationManager::class.java)
     for(chat in chats) {
@@ -145,8 +145,8 @@ class MessagingForegroundService:Service() {
         if(watching==null) watching=scope.launch {
             runtime.sessions.state.map { it.loaded to it.account?.key }.distinctUntilChanged().collectLatest { (initialized,key) ->
                 if(!initialized) return@collectLatest
-                if(key==null) { stopSelf(); return@collectLatest }
-                runtime.conversations.chats(key).collect { notifyUnread(this@MessagingForegroundService,runtime,it) }
+                if(key==null) { MessageNotifications.reconcile(this@MessagingForegroundService,null,emptySet()); stopSelf(); return@collectLatest }
+                runtime.conversations.chats(key).collect { notifyUnread(this@MessagingForegroundService,key,it) }
             }
         }
         return START_STICKY

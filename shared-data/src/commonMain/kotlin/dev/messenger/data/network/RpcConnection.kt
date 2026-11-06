@@ -24,6 +24,7 @@ class RpcConnection internal constructor(
     override val serverId: String,
     private val timeoutMillis: Long = REQUEST_TIMEOUT_MILLIS,
     private val onFailure:(Exception)->Unit = {},
+    override val maxTextBytes: Long = MAX_TEXT_BYTES,
 ) : dev.messenger.data.session.RpcChannel {
     private val lifetime = SupervisorJob(parent.coroutineContext[Job])
     private val scope = CoroutineScope(parent.coroutineContext + lifetime)

@@ -150,12 +150,13 @@ class ConversationRepository(
         // Reconcile old membership snapshots too, before recording repaired user versions.
         for (chatId in members.filter { it.userId in missing }.map { it.chatId }.distinct()) {
             try {
+                val requestStamp = dao.cacheStamp(key)
                 val chat = sessions.request(Commands.ChatsGet, ChatParams(chatId))
                 val snapshot = if (chat.membership.status == "active") fetchMembers(key, chatId) else emptyList()
                 val profiles = resolveMemberProfiles(key, snapshot)
                 requireAccount(key)
                 dao.replaceMembers(key, chatId, snapshot, profiles)
-                dao.cacheChat(key, chat)
+                dao.cacheChat(key, chat, requestStamp = requestStamp, allowRestore = true)
             } catch (failure: RemoteFailure) {
                 if (failure.code != "CHAT_UNAVAILABLE") throw failure
                 requireAccount(key)
@@ -176,6 +177,7 @@ class ConversationRepository(
     }
 
     private suspend fun catalog(key: String) {
+        val requestStamp = dao.cacheStamp(key)
         val start = sessions.request(Commands.SyncStart, EmptyParams())
         dao.clearStage(key)
         val seen = mutableSetOf<String>()
@@ -187,11 +189,12 @@ class ConversationRepository(
             cursor = page.nextCursor
             if (cursor != null && !seen.add(cursor)) throw ProtocolFailure("CATALOG_CURSOR_LOOP")
         } while (cursor != null)
-        dao.installCatalog(key, start.cursor, Uuid.random().toString())
+        dao.installCatalog(key, start.cursor, Uuid.random().toString(), requestStamp)
     }
     private suspend fun replay(key: String) {
         do {
             val cursor = requireNotNull(dao.syncState(key)).cursor
+            val requestStamp = dao.cacheStamp(key)
             val page = sessions.request(Commands.SyncPull, SyncParams(cursor))
             val changed = linkedSetOf<String>()
             val revoked = linkedSetOf<String>()
@@ -244,7 +247,7 @@ class ConversationRepository(
                 it.data["userId"]?.jsonPrimitive?.contentOrNull == key.substringAfter(':') }
             val me = if (ownChanged) sessions.request(MoreCommands.UsersMe, EmptyParams()) else null
             requireAccount(key)
-            dao.applyPage(key, cursor, page, chats, messages, revoked, snapshots, me, profiles)
+            dao.applyPage(key, cursor, page, chats, messages, revoked, snapshots, me, profiles, requestStamp)
             // ACK is deliberately after the completed Room transaction, including unknown events.
             val channel = sessions.connection()
             if (acknowledgedChannel !== channel || acknowledgedCursor != page.nextCursor) {
@@ -281,11 +284,12 @@ class ConversationRepository(
         }
         for (pending in database.messages().ready(key, 20)) {
             try {
+                val requestStamp = dao.cacheStamp(key)
                 val message = sessions.request(Commands.MessagesSend,
                     SendParams(pending.chatId, pending.operationId, pending.contentJson?.let { wireJson.decodeFromString<PlainContent>(it) } ?: PlainContent(pending.text), pending.replyTo),
                     Uuid.parse(pending.operationId))
                 requireAccount(key)
-                dao.cacheMessages(key, listOf(message))
+                dao.cacheMessages(key, listOf(message), requestStamp)
                 // The durable journal updates the chat summary; a read cooldown must not block the next send.
             } catch (error: RemoteFailure) {
                 if (error.retryable || error.code == "UNAUTHENTICATED") throw error
@@ -297,11 +301,10 @@ class ConversationRepository(
 
     fun members(key:String,chatId:String):Flow<List<MemberInfo>> = dao.observeMembers(key,chatId).map { rows -> rows.map { wireJson.decodeFromString<MemberInfo>(it.json) } }
     suspend fun initialUnreadCursor(key:String,chatId:String):Long? {
-        if(connection.value.online) loadMembers(key,chatId)
         val chat=chat(key,chatId).first() ?: return null
         if(chat.unreadCount<=0) return null
-        val own=dao.members(key,chatId).map {wireJson.decodeFromString<MemberInfo>(it.json)}.firstOrNull {it.userId==key.substringAfter(':')} ?: return null
-        return maxOf(own.readSeq,dao.receipt(key,chatId,"read")?.throughSeq ?: 0,chat.membership.joinedSeq-1)
+        val own=dao.members(key,chatId).map {wireJson.decodeFromString<MemberInfo>(it.json)}.firstOrNull {it.userId==key.substringAfter(':')}
+        return maxOf(own?.readSeq ?: 0,dao.receipt(key,chatId,"read")?.throughSeq ?: 0,chat.membership.joinedSeq-1)
     }
     suspend fun loadMembers(key:String,chatId:String) {
         requireAccount(key)
@@ -347,10 +350,14 @@ class ConversationRepository(
         execute(Commands.ChatsDirect, DirectParams(userId), Uuid.random())
     suspend fun send(key: String, chatId: String, text: String, replyTo: String? = null, files: List<String> = emptyList()) = localWriteMutex.withLock {
         requireAccount(key)
-        require((text.isNotBlank() || files.isNotEmpty()) && text.codePointCount() <= 16384 && files.size <= 10)
+        validateTextSize(text)
+        require((text.isNotBlank() || files.isNotEmpty()) && files.size <= 10)
         val local = RoomLocalMessages(database.messages(), AccountId(Uuid.parse(key.substringBefore(':')), Uuid.parse(key.substringAfter(':'))))
         local.saveDraft(ChatId(Uuid.parse(chatId)), text)
         database.messages().enqueue(requireNotNull(database.messages().draft(key,chatId)), OutboxEntity(key, Uuid.random().toString(), chatId, text, Clock.System.now().toEpochMilliseconds(), if(files.isEmpty()) "READY" else "WAITING_FOR_FILES", replyTo, wireJson.encodeToString(PlainContent(text, textEntities=mentions(text,dao.members(key,chatId).map { wireJson.decodeFromString<MemberInfo>(it.json) }), attachmentIds=files))))
+    }
+    fun validateTextSize(text: String) {
+        if (text.encodeToByteArray().size.toLong() > sessions.state.value.maxTextBytes) throw ApplicationFailure("MESSAGE_TOO_LARGE")
     }
     suspend fun read(key:String,chatId:String,seq:Long) { requireAccount(key); dao.advanceReceipt(key,chatId,"read",seq) }
     suspend fun retry(key: String, operationId: String) {
@@ -364,16 +371,19 @@ class ConversationRepository(
         dao.observeWindow(key,chatId,lower,upper,limit).map { rows -> rows.map {wireJson.decodeFromString<Message>(it.json)} }
     suspend fun historyPage(key:String,chatId:String,direction:String,anchor:Long?,limit:Int=50):History {
         requireAccount(key)
-        if(!sessions.state.value.online) {
-            val rows=if(direction=="around" && anchor!=null) (dao.cachedBefore(key,chatId,anchor,limit/2).reversed()+dao.cachedAfter(key,chatId,anchor-1,limit/2))
-                else if(direction=="after") dao.cachedAfter(key,chatId,anchor ?: 0,limit)
-                else dao.cachedBefore(key,chatId,anchor ?: Long.MAX_VALUE,limit).reversed()
-            val items=rows.map {wireJson.decodeFromString<Message>(it.json)}
-            return History(items,items.firstOrNull()?.seq,items.lastOrNull()?.seq,true,true)
-        }
+        if(!sessions.state.value.online) return cachedHistoryPage(key,chatId,direction,anchor,limit)
+        val requestStamp = dao.cacheStamp(key)
         val page=sessions.request(Commands.MessagesHistory,HistoryParams(chatId,direction,anchor,limit))
-        requireAccount(key);dao.cacheMessages(key,page.items)
+        requireAccount(key);dao.cacheMessages(key,page.items,requestStamp)
         return page
+    }
+    suspend fun cachedHistoryPage(key:String,chatId:String,direction:String,anchor:Long?,limit:Int=50):History {
+        requireAccount(key)
+        val rows=if(direction=="around" && anchor!=null) (dao.cachedBefore(key,chatId,anchor,limit/2).reversed()+dao.cachedAfter(key,chatId,anchor-1,limit/2))
+            else if(direction=="after") dao.cachedAfter(key,chatId,anchor ?: 0,limit)
+            else dao.cachedBefore(key,chatId,anchor ?: Long.MAX_VALUE,limit).reversed()
+        val items=rows.map {wireJson.decodeFromString<Message>(it.json)}
+        return History(items,items.firstOrNull()?.seq,items.lastOrNull()?.seq,true,true)
     }
     fun replyTargets(key:String,chatId:String,ids:List<String>):Flow<Map<String,Message>> = channelFlow {
         if(ids.isEmpty()) {send(emptyMap());return@channelFlow}
@@ -392,8 +402,9 @@ class ConversationRepository(
     suspend fun messageSequence(key:String,chatId:String,messageId:String):Long {
         val cached=dao.message(key,messageId)
         if(cached!=null) {require(cached.chatId==chatId);return cached.seq}
+        val requestStamp = dao.cacheStamp(key)
         val message=sessions.request(MoreCommands.MessagesGet,MessageParams(messageId))
-        require(message.chatId==chatId);requireAccount(key);dao.cacheMessages(key,listOf(message))
+        require(message.chatId==chatId);requireAccount(key);dao.cacheMessages(key,listOf(message),requestStamp)
         return message.seq
     }
     fun profile(accountId:String):Flow<Me?> = database.profiles().observe(accountId).map { it?.let { row -> wireJson.decodeFromString<Me>(row.json) } }
@@ -407,6 +418,7 @@ class ConversationRepository(
 
     suspend fun <P, R> execute(command: Command<P, R>, params: P, operationId: Uuid? = null): R {
         val key = requireNotNull(sessions.state.value.account).key
+        if (params is EditParams) validateTextSize(params.text)
         // Persist only a digest and operation identity. OTP/TOTP commands stay ephemeral.
         val durable = command.mutation && !command.name.startsWith("auth.") && !command.name.startsWith("users.email.")
         val requestKey = if(durable) (command.name+":"+wireJson.encodeToString(command.params,params)).encodeUtf8().sha256().hex() else null
@@ -418,14 +430,15 @@ class ConversationRepository(
         val memberRequest = params as? ChatPageParams
         val cachesMembers = command.name == "groups.members.list" || command.name == "receipts.list"
         val expectedRevision = if (cachesMembers && memberRequest != null) dao.memberRevision(key, memberRequest.chatId) else 0
+        val requestStamp = dao.cacheStamp(key)
         val result = sessions.request(command, params, stableId)
         requireAccount(key)
         when (result) {
             is Me -> dao.cacheMe(key, result)
             is User -> dao.cacheUser(key, result)
-            is Chat -> dao.cacheChat(key, result)
-            is Message -> dao.cacheMessages(key, listOf(result))
-            is Items<*> -> dao.cacheMessages(key, result.items.filterIsInstance<Message>())
+            is Chat -> dao.cacheChat(key, result, requestStamp = requestStamp, allowRestore = true)
+            is Message -> dao.cacheMessages(key, listOf(result), requestStamp)
+            is Items<*> -> dao.cacheMessages(key, result.items.filterIsInstance<Message>(), requestStamp)
             is Page<*> -> if (cachesMembers && memberRequest != null) {
                 val members = result.items.filterIsInstance<MemberInfo>()
                 val profiles = resolveMemberProfiles(key, members)

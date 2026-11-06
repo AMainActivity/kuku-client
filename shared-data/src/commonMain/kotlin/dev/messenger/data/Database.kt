@@ -74,7 +74,7 @@ abstract class MessagesDao {
     }
 }
 
-@Database(entities = [DraftEntity::class, OutboxEntity::class, ChatEntity::class, MessageEntity::class, SyncEntity::class, EventEntity::class, CatalogEntity::class, TransferEntity::class, ReceiptEntity::class, MemberCacheEntity::class, MutationEntity::class, ShareInboxEntity::class, AccountProfileEntity::class, UserProfileEntity::class, MemberCacheRevisionEntity::class], version = 13, exportSchema = true, autoMigrations = [AutoMigration(from = 1, to = 2), AutoMigration(from = 2, to = 3), AutoMigration(from = 3, to = 4), AutoMigration(from = 4, to = 5), AutoMigration(from = 5, to = 6), AutoMigration(from = 6, to = 7), AutoMigration(from = 7, to = 8), AutoMigration(from = 8, to = 9), AutoMigration(from = 9, to = 10), AutoMigration(from = 10, to = 11), AutoMigration(from = 11, to = 12), AutoMigration(from = 12, to = 13)])
+@Database(entities = [DraftEntity::class, OutboxEntity::class, ChatEntity::class, MessageEntity::class, SyncEntity::class, ChatCacheState::class, TransferChatLink::class, CatalogEntity::class, TransferEntity::class, ReceiptEntity::class, MemberCacheEntity::class, MutationEntity::class, ShareInboxEntity::class, AccountProfileEntity::class, UserProfileEntity::class, MemberCacheRevisionEntity::class], version = 14, exportSchema = true, autoMigrations = [AutoMigration(from = 1, to = 2), AutoMigration(from = 2, to = 3), AutoMigration(from = 3, to = 4), AutoMigration(from = 4, to = 5), AutoMigration(from = 5, to = 6), AutoMigration(from = 6, to = 7), AutoMigration(from = 7, to = 8), AutoMigration(from = 8, to = 9), AutoMigration(from = 9, to = 10), AutoMigration(from = 10, to = 11), AutoMigration(from = 11, to = 12), AutoMigration(from = 12, to = 13)])
 @ConstructedBy(MessengerDatabaseConstructor::class)
 abstract class MessengerDatabase : RoomDatabase() {
     abstract fun profiles(): AccountProfilesDao
@@ -88,4 +88,13 @@ expect object MessengerDatabaseConstructor : RoomDatabaseConstructor<MessengerDa
     override fun initialize(): MessengerDatabase
 }
 fun buildDatabase(builder: RoomDatabase.Builder<MessengerDatabase>): MessengerDatabase =
-    builder.setDriver(BundledSQLiteDriver()).setQueryCoroutineContext(Dispatchers.IO).build()
+    builder.addMigrations(CacheSafetyMigration).setDriver(BundledSQLiteDriver()).setQueryCoroutineContext(Dispatchers.IO).build()
+
+/** Discard obsolete raw payloads, preserving projections, cursors and pending work. */
+internal object CacheSafetyMigration : androidx.room.migration.Migration(13, 14) {
+    override fun migrate(connection: androidx.sqlite.SQLiteConnection) {
+        connection.prepare("DROP TABLE IF EXISTS sync_events").use { it.step() }
+        connection.prepare("CREATE TABLE IF NOT EXISTS chat_cache_state (accountId TEXT NOT NULL, chatId TEXT NOT NULL, revision INTEGER NOT NULL, accessRevision INTEGER NOT NULL, revoked INTEGER NOT NULL, PRIMARY KEY(accountId, chatId))").use { it.step() }
+        connection.prepare("CREATE TABLE IF NOT EXISTS transfer_chat_links (accountId TEXT NOT NULL, chatId TEXT NOT NULL, jobId TEXT NOT NULL, PRIMARY KEY(accountId, chatId, jobId))").use { it.step() }
+    }
+}

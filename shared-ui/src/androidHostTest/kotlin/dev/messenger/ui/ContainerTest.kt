@@ -57,7 +57,7 @@ class ContainerTest {
             val chatId=Uuid.random().toString()
             val resolved=listOf<ViewModel>(setup,koin.get<AuthViewModel>(),koin.get<ChatsViewModel>(),
                 koin.get<IncomingShareViewModel>(),koin.get<DirectoryViewModel>(),koin.get<AccountViewModel>(),
-                koin.get<AdminViewModel>(),koin.get<DrawerViewModel>(),
+                koin.get<AdminViewModel>(),koin.get<DrawerViewModel>(),koin.get<dev.messenger.feature.groups.UnbanMemberViewModel>(),
                 koin.get<GroupViewModel> {parametersOf(key,chatId)},
                 koin.get<ChatViewModel> {parametersOf(key,chatId)})
             resolved.forEachIndexed {index,model -> models.put(index.toString(),model)}

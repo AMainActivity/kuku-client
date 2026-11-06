@@ -16,7 +16,13 @@ data class TransferEntity(
     @ColumnInfo(defaultValue = "NULL") val createId:String? = null,
     val completeId: String = Uuid.random().toString(), val cancelId: String = Uuid.random().toString(),
 )
+@Entity(tableName = "transfer_chat_links", primaryKeys = ["accountId", "chatId", "jobId"])
+data class TransferChatLink(val accountId: String, val chatId: String, val jobId: String)
+
 @Dao abstract class TransfersDao {
+    @Upsert abstract suspend fun link(row: TransferChatLink)
+    @Query("DELETE FROM transfer_chat_links WHERE accountId=:accountId")
+    abstract suspend fun clearLinks(accountId: String)
     @Query("SELECT COUNT(*) FROM transfers WHERE accountId=:accountId AND state IN ('QUEUED','RUNNING','CANCELLING')")
     abstract fun observeWorkCount(accountId:String):Flow<Long>
     @Query("SELECT COUNT(*) FROM transfers WHERE accountId=:accountId AND state IN ('READY','CANCELLED')")
@@ -24,11 +30,17 @@ data class TransferEntity(
     @Query("SELECT * FROM transfers WHERE accountId=:accountId")
     abstract suspend fun all(accountId:String):List<TransferEntity>
     @Query("DELETE FROM transfers WHERE accountId=:accountId AND jobId=:jobId")
-    abstract suspend fun remove(accountId:String,jobId:String)
+    protected abstract suspend fun removeRow(accountId:String,jobId:String)
+    @Query("DELETE FROM transfer_chat_links WHERE accountId=:accountId AND jobId=:jobId")
+    protected abstract suspend fun removeLinks(accountId:String,jobId:String)
+    @Transaction open suspend fun remove(accountId:String,jobId:String) {
+        removeLinks(accountId,jobId)
+        removeRow(accountId,jobId)
+    }
     @Query("SELECT * FROM transfers WHERE accountId=:accountId AND jobId IN (:jobIds)")
     abstract fun observeJobs(accountId:String,jobIds:List<String>):Flow<List<TransferEntity>>
     @Upsert abstract suspend fun put(value: TransferEntity)
-    @Query("SELECT * FROM transfers WHERE accountId=:accountId AND chatId=:chatId ORDER BY jobId")
+    @Query("SELECT * FROM transfers WHERE accountId=:accountId AND (chatId=:chatId OR jobId IN (SELECT jobId FROM transfer_chat_links WHERE accountId=:accountId AND chatId=:chatId)) ORDER BY jobId")
     abstract fun observe(accountId: String, chatId: String): Flow<List<TransferEntity>>
     @Query("SELECT * FROM transfers WHERE accountId=:accountId AND direction=:direction AND state IN ('QUEUED','RUNNING','CANCELLING') ORDER BY jobId LIMIT 1")
     abstract suspend fun next(accountId: String, direction: String): TransferEntity?

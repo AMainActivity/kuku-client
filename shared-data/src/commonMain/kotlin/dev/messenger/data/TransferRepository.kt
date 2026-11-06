@@ -11,6 +11,8 @@ import kotlinx.coroutines.sync.withLock
 import okio.ByteString.Companion.toByteString
 import kotlin.uuid.Uuid
 
+private class FileIntegrityFailure : Exception("FILE_INTEGRITY_FAILED")
+
 class TransferRepository(private val database: MessengerDatabase, val files: ManagedFiles,
     private val network: MessengerNetwork, private val sessions: SessionCoordinator, private val owner: CoroutineScope) {
     private val dao = database.transfers()
@@ -38,9 +40,9 @@ class TransferRepository(private val database: MessengerDatabase, val files: Man
                             catch(failure: Exception) {
                                 val retryable = failure !is RemoteFailure || failure.retryable
                                 val permanentHttp = (failure as? FileHttpFailure)?.status in setOf(400,403,404,413,416)
-                                if(!retryable || permanentHttp || failure is IllegalArgumentException) {
+                                if(!retryable || permanentHttp || failure is IllegalArgumentException || failure is FileIntegrityFailure) {
                                     if(job.state=="CANCELLING") dao.state(accountId,job.jobId,"FAILED")
-                                    dao.outcome(accountId,job.jobId,"FAILED",ConversationRepository.safeError(failure))
+                                    dao.outcome(accountId,job.jobId,"FAILED",if (failure is FileIntegrityFailure) "FILE_INTEGRITY_FAILED" else ConversationRepository.safeError(failure))
                                 }
                                 else delay(5000)
                             }
@@ -57,7 +59,7 @@ class TransferRepository(private val database: MessengerDatabase, val files: Man
     }
     suspend fun clearAccount(accountId:String) = withContext(Dispatchers.IO) {
         stop()
-        try { dao.all(accountId).forEach { files.remove(accountId,it.jobId) }; dao.clear(accountId) }
+        try { dao.all(accountId).forEach { files.remove(accountId,it.jobId) }; dao.clear(accountId); dao.clearLinks(accountId) }
         finally { start() }
     }
     suspend fun stop() { worker?.cancelAndJoin(); worker=null }
@@ -86,7 +88,9 @@ class TransferRepository(private val database: MessengerDatabase, val files: Man
         require(sessions.state.value.account?.key == accountId)
         require(attachment.size in 1..ManagedFiles.MAX_BYTES && attachment.status == "ready")
         val id = attachment.attachmentId
+        dao.link(TransferChatLink(accountId,chatId,id))
         val existing=dao.get(accountId,id)
+        existing?.let { dao.link(TransferChatLink(accountId,it.chatId,id)) }
         if(existing?.state in setOf("QUEUED","RUNNING","CANCELLING")) return@withLock
         if(existing?.state == "READY" && files.size(accountId,id)==attachment.size) return@withLock
         dao.put(TransferEntity(accountId,id,chatId,"DOWNLOAD",attachment.filename,attachment.mime,
@@ -105,7 +109,12 @@ class TransferRepository(private val database: MessengerDatabase, val files: Man
         return unique.map { requireNotNull(byId[it.attachmentId]) }
     }
     suspend fun pause(accountId: String, jobId: String) = dao.state(accountId,jobId,"PAUSED")
-    suspend fun resume(accountId: String, jobId: String) {
+    suspend fun resume(accountId: String, jobId: String) = withContext(Dispatchers.IO) {
+        val job = dao.get(accountId, jobId) ?: return@withContext
+        if (job.direction == "DOWNLOAD" && job.state == "FAILED" && (job.error == "FILE_INTEGRITY_FAILED" || files.size(accountId,jobId) >= job.size)) {
+            files.remove(accountId, jobId)
+            dao.progress(accountId, jobId, 0, null)
+        }
         // A terminal remote upload requires a new mutation identity; local job identity stays in the draft/outbox.
         if(dao.restartExpired(accountId,jobId,Uuid.random().toString(),Uuid.random().toString(),Uuid.random().toString())==0)
             dao.state(accountId,jobId,"QUEUED")
@@ -163,7 +172,7 @@ class TransferRepository(private val database: MessengerDatabase, val files: Man
     }
     private suspend fun download(job: TransferEntity) {
         var offset=files.size(job.accountId,job.jobId)
-        require(offset<=job.size)
+        if (offset > job.size) throw FileIntegrityFailure()
         var etag=job.etag
         while(offset<job.size && active(job)) {
             val end=minOf(offset+5L*1024*1024-1,job.size-1)
@@ -184,7 +193,7 @@ class TransferRepository(private val database: MessengerDatabase, val files: Man
             dao.progress(job.accountId,job.jobId,offset,etag)
         }
         if(offset==job.size && active(job)) {
-            require(files.hash(job.accountId,job.jobId)==job.sha256)
+            if (files.hash(job.accountId,job.jobId) != job.sha256) throw FileIntegrityFailure()
             dao.outcome(job.accountId,job.jobId,"READY",null)
         }
     }

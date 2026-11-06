@@ -17,7 +17,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
@@ -82,7 +81,7 @@ fun ConversationScreen(accountKey: String, chatId: String, back: () -> Unit, det
     val atTail by model.atTail.collectAsStateWithLifecycle()
     val bottomRequest by model.bottomRequest.collectAsStateWithLifecycle()
     val movingToBottom by model.movingToBottom.collectAsStateWithLifecycle()
-    var positioned by rememberSaveable(accountKey,chatId) {mutableStateOf(false)}
+    var positioned by rememberSaveable(accountKey,chatId,openingCursor) {mutableStateOf(false)}
     var handledBottom by rememberSaveable(accountKey,chatId) {mutableStateOf(0L)}
     val pendingCount=pending.count {item -> messages.none {it.clientMessageId==item.operationId.value.toString()}}
     val dividerIndex=openingCursor?.let {cursor ->
@@ -96,7 +95,7 @@ fun ConversationScreen(accountKey: String, chatId: String, back: () -> Unit, det
     var forwardSelection by remember { mutableStateOf(false) }
     val messageClock by rememberMessageClock()
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
-    LaunchedEffect(openingReady) {
+    LaunchedEffect(openingReady,openingCursor,positioned) {
         if(positioned || !openingReady) return@LaunchedEffect
         snapshotFlow {openingAnchor==null || messages.firstOrNull()?.messageId==openingAnchor}.first {it}
         val index=dividerIndex ?: 0
@@ -133,6 +132,7 @@ fun ConversationScreen(accountKey: String, chatId: String, back: () -> Unit, det
                 return false
             }
             if(!scrollToTarget()) return@LaunchedEffect
+            positioned=true
             highlightedMessageId=target
             kotlinx.coroutines.delay(REPLY_HIGHLIGHT_MILLIS)
         } finally {
@@ -239,7 +239,9 @@ fun ConversationScreen(accountKey: String, chatId: String, back: () -> Unit, det
             TextButton(onClick={selection=emptyList()}) {Text(stringResource(Res.string.cancel))}
         }
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
-        LazyColumn(Modifier.fillMaxSize().graphicsLayer {alpha=if(positioned) 1f else 0f}, state = listState, reverseLayout = true, contentPadding=PaddingValues(top=if(openingCursor!=null && !more) maxHeight else 0.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Cached content is visible even when the unread boundary is unavailable.
+        // The positioned flag separately gates read receipts and automatic pagination.
+        LazyColumn(Modifier.fillMaxSize(), state = listState, reverseLayout = true, contentPadding=PaddingValues(top=if(openingCursor!=null && !more) maxHeight else 0.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             val known = messages.map { it.clientMessageId }.toSet()
             items(pending.filterNot { it.operationId.value.toString() in known }.reversed(), key = { "pending-${it.operationId.value}" }) { item ->
                 MessageBubble(own=true) {

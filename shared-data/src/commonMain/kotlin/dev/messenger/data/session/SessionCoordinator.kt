@@ -23,6 +23,7 @@ interface SecureStore {
 @Serializable class SavedSession(
     val host: String, val port: Int, val credentials: Credentials,
     val refresh: RefreshAttempt? = null,
+    val maxTextBytes: Long = MAX_TEXT_BYTES,
 ) { override fun toString() = "SavedSession([redacted])" }
 @Serializable class Vault(val deviceId: String, val session: SavedSession? = null) {
     override fun toString() = "Vault([redacted])"
@@ -30,9 +31,10 @@ interface SecureStore {
 data class ActiveAccount(val serverId: String, val userId: String, val sessionId: String) {
     val key: String get() = "$serverId:$userId"
 }
-data class SessionState(val loaded: Boolean = false, val account: ActiveAccount? = null, val online: Boolean = false)
+data class SessionState(val loaded: Boolean = false, val account: ActiveAccount? = null, val online: Boolean = false, val maxTextBytes: Long = MAX_TEXT_BYTES)
 
 interface RpcChannel {
+    val maxTextBytes: Long get() = MAX_TEXT_BYTES
     val serverId: String
     val status: StateFlow<ConnectionStatus>
     val highWatermark: StateFlow<Long?>
@@ -119,7 +121,7 @@ class SessionCoordinator(
     private fun publish(value: Vault, online: Boolean) {
         val c = value.session?.credentials
         mutableState.value = SessionState(true,
-            c?.let { ActiveAccount(it.serverId, it.userId, it.sessionId) }, online)
+            c?.let { ActiveAccount(it.serverId, it.userId, it.sessionId) }, online, value.session?.maxTextBytes ?: MAX_TEXT_BYTES)
     }
     private suspend fun persist(value: Vault) = withContext(NonCancellable) {
         secure.write(wireJson.encodeToString(value))
@@ -179,7 +181,7 @@ class SessionCoordinator(
             connection.close(); channel = null
             throw ProtocolFailure("SESSION_IDENTITY_CHANGED")
         }
-        persist(Vault(current.deviceId, SavedSession(endpoint.host, endpoint.port, result)))
+        persist(Vault(current.deviceId, SavedSession(endpoint.host, endpoint.port, result, maxTextBytes = connection.maxTextBytes)))
         challenge = null
         observeChannel(connection)
         scheduleRefresh(connection)
@@ -205,6 +207,12 @@ class SessionCoordinator(
                     rotate(opened, current, saved)
                 }
             }
+            val latest = requireNotNull(vault)
+            val latestSaved = requireNotNull(latest.session)
+            if (latestSaved.maxTextBytes != opened.maxTextBytes) {
+                persist(Vault(latest.deviceId, SavedSession(latestSaved.host, latestSaved.port,
+                    latestSaved.credentials, latestSaved.refresh, opened.maxTextBytes)))
+            }
             channel = opened
             publish(requireNotNull(vault), opened.status.value==ConnectionStatus.OPEN)
             observeChannel(opened)
@@ -222,14 +230,14 @@ class SessionCoordinator(
 
     private suspend fun rotate(opened: RpcChannel, current: Vault, saved: SavedSession) {
         val attempt = saved.refresh ?: RefreshAttempt(Uuid.random().toString(), now()).also {
-            persist(Vault(current.deviceId, SavedSession(saved.host, saved.port, saved.credentials, it)))
+            persist(Vault(current.deviceId, SavedSession(saved.host, saved.port, saved.credentials, it, saved.maxTextBytes)))
         }
         val age = now() - attempt.startedAtMillis
         if (age !in 0 until REFRESH_RETRY_WINDOW_MILLIS) throw ProtocolFailure("REFRESH_WINDOW_EXPIRED")
         val result = opened.request(Commands.Refresh, RefreshParams(saved.credentials.refreshToken),
             Uuid.parse(attempt.operationId))
         requireIdentity(saved.credentials, result.identity())
-        persist(Vault(current.deviceId, SavedSession(saved.host, saved.port, result)))
+        persist(Vault(current.deviceId, SavedSession(saved.host, saved.port, result, maxTextBytes = opened.maxTextBytes)))
         onTokenRefreshed()
     }
 

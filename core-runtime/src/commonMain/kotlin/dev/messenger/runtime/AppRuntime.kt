@@ -10,13 +10,13 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-class AppRuntime(private val store: LocalStore, private val network: MessengerNetwork, secureStore: SecureStore, files: ManagedFiles) {
+class AppRuntime(private val store: LocalStore, private val network: MessengerNetwork, secureStore: SecureStore, files: ManagedFiles, onAccountRemoved: (String) -> Unit = {}) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val sessions = SessionCoordinator(secureStore,
         Connector { endpoint, owner, expected -> network.connect(endpoint, owner, expected) }, scope,onTokenRefreshed=::reportTokenRefreshed)
     val conversations = store.conversations(sessions, scope)
     val transfers = store.transfers(files, network, sessions, scope)
-    init { conversations.onAccountRemoved = transfers::clearAccount }
+    init { conversations.onAccountRemoved = { key -> try { transfers.clearAccount(key) } finally { onAccountRemoved(key) } } }
     private val runtimeLock = Mutex()
     private val clients = mutableSetOf<String>()
     private val commands=Channel<Pair<String,Boolean>>(Channel.UNLIMITED)

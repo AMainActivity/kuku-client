@@ -21,6 +21,9 @@ class HistoryWindowTest {
         override suspend fun page(direction:String,anchor:Long?,limit:Int):History {
             pageGate?.await()
             calls+=Triple(direction,anchor,limit)
+            return cachedPage(direction,anchor,limit)
+        }
+        override suspend fun cachedPage(direction:String,anchor:Long?,limit:Int):History {
             val all=messages.value
             val items=when(direction) {
                 "before" -> all.filter {it.seq<(anchor ?: Long.MAX_VALUE)}.takeLast(limit)
@@ -58,7 +61,8 @@ class HistoryWindowTest {
         try {
             withTimeout(3000) {window.openingReady.first {it}}
             assertEquals(200L,window.openingCursor.value)
-            assertEquals(Triple("around",201L,50),source.calls.first())
+            assertTrue(source.calls.isEmpty(), "Offline opening must only read the local page")
+            assertEquals(source.messages.value.first { it.seq==176L }.messageId,window.openingAnchor.value)
         } finally {job.cancelAndJoin()}
     }
     @Test fun latestPositionsCachedTailBeforeNetworkResponds()=runBlocking {
@@ -77,6 +81,21 @@ class HistoryWindowTest {
             gate.complete(Unit)
             move.join()
         } finally {job.cancelAndJoin()}
+    }
+    @Test fun latestPositionsLocallyEvenWhileOpeningRequestHoldsHistoryLock()=runBlocking<Unit> {
+        val gate=CompletableDeferred<Unit>()
+        val source=Source().also {it.unread=100;it.pageGate=gate}
+        val window=HistoryWindow(source)
+        val collect=launch {window.history.collect()}
+        var move:Job?=null
+        try {
+            withTimeout(3000) {window.loading.first {it}}
+            val positioned=CompletableDeferred<Unit>()
+            move=launch {window.latest {positioned.complete(Unit)}}
+            withTimeout(3000) {positioned.await()}
+            assertEquals(source.messages.value.last().messageId,window.latestAnchor.value)
+            assertTrue(window.atTail.value)
+        } finally {gate.complete(Unit);move?.cancelAndJoin();collect.cancelAndJoin()}
     }
     @Test fun jumpInsideWindowDoesNotReloadOrShowLoading()=runBlocking {
         val source=Source();val window=HistoryWindow(source)

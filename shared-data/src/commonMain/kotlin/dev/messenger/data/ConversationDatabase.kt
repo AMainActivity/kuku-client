@@ -14,8 +14,10 @@ data class MessageEntity(val accountId: String, val messageId: String, val chatI
     val clientMessageId: String, val seq: Long, val version: Long, val json: String)
 @Entity(tableName = "sync_state")
 data class SyncEntity(@PrimaryKey val accountId: String, val cursor: Long, val generation: String?)
-@Entity(tableName = "sync_events", primaryKeys = ["accountId", "cursor"])
-data class EventEntity(val accountId: String, val cursor: Long, val type: String, val json: String)
+/** Per-chat fence survives revocation and rejoining; request stamps are captured before network IO. */
+@Entity(tableName = "chat_cache_state", primaryKeys = ["accountId", "chatId"])
+data class ChatCacheState(val accountId: String, val chatId: String, val revision: Long,
+    val accessRevision: Long, val revoked: Boolean)
 @Entity(tableName = "catalog_stage", primaryKeys = ["accountId", "chatId"])
 data class CatalogEntity(val accountId: String, val chatId: String, val json: String)
 
@@ -38,6 +40,16 @@ data class UserProfileEntity(val accountId: String, val userId: String, val json
 
 @Dao
 abstract class ConversationsDao {
+    @Query("SELECT COALESCE(MAX(revision),0) FROM chat_cache_state WHERE accountId=:accountId")
+    abstract suspend fun cacheStamp(accountId: String): Long
+    @Query("SELECT * FROM chat_cache_state WHERE accountId=:accountId AND chatId=:chatId")
+    abstract suspend fun cacheState(accountId: String, chatId: String): ChatCacheState?
+    @Upsert protected abstract suspend fun putCacheState(row: ChatCacheState)
+    @Query("DELETE FROM chat_cache_state WHERE accountId=:accountId")
+    protected abstract suspend fun clearCacheStates(accountId: String)
+    @Query("SELECT * FROM chats WHERE accountId=:accountId AND chatId=:chatId")
+    abstract suspend fun cachedChat(accountId: String, chatId: String): ChatEntity?
+
     @Query("SELECT revision FROM member_cache_revisions WHERE accountId=:accountId AND chatId=:chatId")
     protected abstract suspend fun storedMemberRevision(accountId: String, chatId: String): Long?
     open suspend fun memberRevision(accountId: String, chatId: String): Long =
@@ -193,7 +205,6 @@ abstract class ConversationsDao {
     @Upsert protected abstract suspend fun putChat(row: ChatEntity)
     @Upsert protected abstract suspend fun putMessage(row: MessageEntity)
     @Upsert protected abstract suspend fun putState(row: SyncEntity)
-    @Upsert protected abstract suspend fun putEvents(rows: List<EventEntity>)
     @Upsert abstract suspend fun stage(rows: List<CatalogEntity>)
     @Query("SELECT * FROM catalog_stage WHERE accountId=:accountId")
     protected abstract suspend fun staged(accountId: String): List<CatalogEntity>
@@ -213,8 +224,8 @@ abstract class ConversationsDao {
     protected abstract suspend fun staleChats(accountId: String, generation: String): List<String>
 
     @Transaction
-    open suspend fun installCatalog(accountId: String, watermark: Long, generation: String) {
-        for (row in staged(accountId)) cacheChat(accountId, wireJson.decodeFromString<Chat>(row.json), generation)
+    open suspend fun installCatalog(accountId: String, watermark: Long, generation: String, requestStamp: Long? = null) {
+        for (row in staged(accountId)) cacheChat(accountId, wireJson.decodeFromString<Chat>(row.json), generation, requestStamp, allowRestore = true)
         putState(SyncEntity(accountId, watermark, generation))
         clearStage(accountId)
     }
@@ -227,16 +238,45 @@ abstract class ConversationsDao {
     }
 
     @Transaction
-    open suspend fun cacheChat(accountId: String, chat: Chat, generation: String? = null) {
-        pruneBeforeJoin(accountId,chat.chatId,chat.membership.joinedSeq)
+    open suspend fun cacheChat(accountId: String, chat: Chat, generation: String? = null,
+        requestStamp: Long? = null, allowRestore: Boolean = false): Boolean {
+        val state = cacheState(accountId, chat.chatId)
+        if (requestStamp != null && state != null && requestStamp < state.accessRevision) return false
+        if (state?.revoked == true && !allowRestore) return false
+        chat.peer?.let { cacheUser(accountId, it) }
+        val old = cachedChat(accountId, chat.chatId)?.let { wireJson.decodeFromString<Chat>(it.json) }
+        val freshSnapshot = requestStamp == null || state == null || requestStamp >= state.revision
+        var merged = if (old == null) chat else {
+            val latest = listOfNotNull(old.lastMessage, chat.lastMessage)
+                .maxWithOrNull(compareBy<Message> { it.seq }.thenBy { it.version })
+            (if (old.version > chat.version) old else chat).copy(
+                membership = if (old.membership.version > chat.membership.version) old.membership else chat.membership,
+                preferences = if (old.preferences.version > chat.preferences.version) old.preferences else chat.preferences,
+                unreadCount = if (freshSnapshot) chat.unreadCount else old.unreadCount,
+                lastMessage = latest)
+        }
+        merged.lastMessage?.let { latest ->
+            val cached = message(accountId, latest.messageId)?.let { wireJson.decodeFromString<Message>(it.json) }
+            if (cached != null && cached.version > latest.version) merged = merged.copy(lastMessage = cached)
+        }
+        if ((merged.lastMessage?.seq ?: Long.MAX_VALUE) < merged.membership.joinedSeq) merged = merged.copy(lastMessage = null)
+        merged.peer?.let { merged = merged.withPeer(cacheUser(accountId, it)) }
+        pruneBeforeJoin(accountId, merged.chatId, merged.membership.joinedSeq)
         val stamp = generation ?: syncState(accountId)?.generation ?: ""
-        putChat(ChatEntity(accountId, chat.chatId, wireJson.encodeToString(chat.peer?.let { chat.withPeer(cacheUser(accountId, it)) } ?: chat),
-            chat.preferences.pinned, chat.preferences.pinRank, chat.lastMessage?.createdAt.orEmpty(), stamp))
-        chat.lastMessage?.let { cacheMessages(accountId, listOf(it)) }
+        putChat(ChatEntity(accountId, merged.chatId, wireJson.encodeToString(merged),
+            merged.preferences.pinned, merged.preferences.pinRank, merged.lastMessage?.createdAt.orEmpty(), stamp))
+        putCacheState(ChatCacheState(accountId, chat.chatId, cacheStamp(accountId) + 1,
+            state?.accessRevision ?: 0, false))
+        merged.lastMessage?.let { cacheMessages(accountId, listOf(it)) }
+        return true
     }
     @Transaction
-    open suspend fun cacheMessages(accountId: String, messages: List<Message>) {
+    open suspend fun cacheMessages(accountId: String, messages: List<Message>, requestStamp: Long? = null) {
         for (item in messages) {
+            val state = cacheState(accountId, item.chatId)
+            if (state?.revoked == true || (requestStamp != null && state != null && requestStamp < state.accessRevision)) continue
+            val chat = cachedChat(accountId, item.chatId)?.let { wireJson.decodeFromString<Chat>(it.json) }
+            if (chat != null && item.seq < chat.membership.joinedSeq) continue
             val old = message(accountId, item.messageId)
             if (old == null || item.version >= old.version) {
                 putMessage(MessageEntity(accountId, item.messageId, item.chatId, item.clientMessageId,
@@ -248,6 +288,8 @@ abstract class ConversationsDao {
     }
     @Transaction
     open suspend fun revoke(accountId: String, chatId: String) {
+        val revision = cacheStamp(accountId) + 1
+        putCacheState(ChatCacheState(accountId, chatId, revision, revision, true))
         removeChat(accountId, chatId)
         removeHistory(accountId, chatId)
         removeMembers(accountId, chatId)
@@ -257,22 +299,26 @@ abstract class ConversationsDao {
     @Transaction
     open suspend fun applyPage(accountId: String, expectedCursor: Long, page: SyncPage,
         chats: List<Chat>, messages: List<Message>, revoked: Set<String>,
-        memberSnapshots: Map<String, List<MemberInfo>> = emptyMap(), me: Me? = null, profiles: List<User> = emptyList()) {
+        memberSnapshots: Map<String, List<MemberInfo>> = emptyMap(), me: Me? = null, profiles: List<User> = emptyList(), requestStamp: Long? = null) {
         val state = requireNotNull(syncState(accountId))
         require(state.cursor == expectedCursor)
         require(page.nextCursor >= expectedCursor)
         require(page.items.all { it.cursor > expectedCursor })
         require(page.items.zipWithNext().all { (a,b) -> a.cursor < b.cursor })
         require(page.items.lastOrNull()?.cursor?.let { it == page.nextCursor } ?: (page.nextCursor == expectedCursor))
-        chats.filterNot { it.chatId in revoked }.forEach { cacheChat(accountId, it) }
+        chats.filterNot { it.chatId in revoked }.forEach { cacheChat(accountId, it, requestStamp = requestStamp, allowRestore = true) }
         for (event in page.items.filter { it.type == "user.updated" }) {
             cacheUser(accountId, wireJson.decodeFromJsonElement<User>(event.data))
         }
         profiles.forEach { cacheUser(accountId, it) }
         me?.let { cacheMe(accountId, it) }
-        memberSnapshots.filterKeys { it !in revoked }.forEach { (chatId, items) -> replaceMembers(accountId, chatId, items) }
-        cacheMessages(accountId, messages.filterNot { it.chatId in revoked })
-        messages.filterNot { it.chatId in revoked }.groupBy { it.chatId }.forEach { (chatId,items) -> advanceReceipt(accountId,chatId,"delivered",items.maxOf { it.seq }) }
+        for ((chatId, items) in memberSnapshots.filterKeys { it !in revoked }) {
+            val cache = cacheState(accountId, chatId)
+            if (cache?.revoked != true && (requestStamp == null || cache == null || requestStamp >= cache.accessRevision)) {
+                replaceMembers(accountId, chatId, items)
+            }
+        }
+        cacheMessages(accountId, messages.filterNot { it.chatId in revoked }, requestStamp)
         for (event in page.items.filter { it.type == "receipt.updated" }) {
             val update = wireJson.decodeFromJsonElement<ReceiptUpdate>(event.data)
             if (update.chatId in revoked || update.kind !in setOf("read", "delivered")) continue
@@ -286,18 +332,16 @@ abstract class ConversationsDao {
             putMembers(listOf(row.copy(json = wireJson.encodeToString(next))))
         }
         revoked.forEach { revoke(accountId, it) }
-        putEvents(page.items.map { EventEntity(accountId, it.cursor, it.type, wireJson.encodeToString(it)) })
         putState(state.copy(cursor = page.nextCursor))
     }
 
     @Query("DELETE FROM chats WHERE accountId=:accountId") protected abstract suspend fun clearChats(accountId: String)
     @Query("DELETE FROM history WHERE accountId=:accountId") protected abstract suspend fun clearHistory(accountId: String)
     @Query("DELETE FROM sync_state WHERE accountId=:accountId") protected abstract suspend fun clearSync(accountId: String)
-    @Query("DELETE FROM sync_events WHERE accountId=:accountId") protected abstract suspend fun clearEvents(accountId: String)
     @Query("DELETE FROM drafts WHERE accountId=:accountId") protected abstract suspend fun clearDrafts(accountId: String)
     @Query("DELETE FROM outbox WHERE accountId=:accountId") protected abstract suspend fun clearOutbox(accountId: String)
     @Transaction open suspend fun clearAccount(accountId: String) {
-        clearChats(accountId); clearHistory(accountId); clearSync(accountId); clearEvents(accountId)
+        clearChats(accountId); clearHistory(accountId); clearSync(accountId); clearCacheStates(accountId)
         clearMutations(accountId)
         clearMembers(accountId)
         clearMemberRevisions(accountId)

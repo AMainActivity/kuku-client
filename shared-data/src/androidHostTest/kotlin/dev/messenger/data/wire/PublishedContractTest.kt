@@ -16,11 +16,17 @@ class PublishedContractTest {
 
     @Test fun allPublishedRequestFixturesRoundTripThroughTypedDtos() {
         val fixtures = wireJson.parseToJsonElement(File(directory, "fixtures.json").readText(Charsets.UTF_8)).jsonArray
-        assertEquals(4, fixtures.size, "Review new published fixtures when the contract changes")
+        var supportedFixtures = 0
         for (fixture in fixtures) {
             val request = fixture.jsonObject
             val name = request.getValue("command").jsonPrimitive.content
-            val command = Commands.supported.single { it.name == name }
+            // Additive server commands need not be exposed by this client yet.
+            // Validate all published fixtures; round-trip every implemented command.
+            validate(request, envelope, envelope)
+            val publishedSchema = commands.getValue(name).jsonObject.getValue("params").jsonObject
+            validate(request.getValue("params"), publishedSchema, publishedSchema)
+            val command = Commands.supported.singleOrNull { it.name == name } ?: continue
+            supportedFixtures++
             val params = request.getValue("params")
             val result = roundTripRequest(command, params,
                 request["operationId"]?.jsonPrimitive?.content?.let(Uuid::parse))
@@ -29,6 +35,7 @@ class PublishedContractTest {
             val schema = commands.getValue(name).jsonObject.getValue("params").jsonObject
             validate(result.getValue("params"), schema, schema)
         }
+        assertEquals(4, supportedFixtures, "Review new fixtures for client-supported commands")
         val send = fixtures.single { it.jsonObject["command"]?.jsonPrimitive?.content=="messages.send" }.jsonObject["params"]?.jsonObject?.get("content")?.jsonObject
         assertEquals("Привет 👋", send?.get("text")?.jsonPrimitive?.content)
     }

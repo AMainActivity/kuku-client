@@ -72,6 +72,7 @@ class AccountViewModel(private val repository: ProfileRepository, val transfers:
     fun changeEmail(email: String) = action { mutableEmailChange.value = repository.emailChangeStart(email) }
     fun verifyEmail(oldCode: String, newCode: String, mfa: String) = action {
         val change = requireNotNull(mutableEmailChange.value)
+        if (mutableMe.value?.mfaEnabled == true && !mfa.matches(Regex("[0-9]{6}"))) throw ApplicationFailure("MFA_REQUIRED")
         repository.emailChangeVerify(change.changeId, oldCode, newCode, mfa.ifBlank { null })
         mutableEmailChange.value = null
         repository.logout()

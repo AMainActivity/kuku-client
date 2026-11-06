@@ -21,7 +21,7 @@ import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.koinApplication
 import org.koin.dsl.module
 
-class AppContainer(private val store: LocalStore, private val network: MessengerNetwork, secureStore: SecureStore, files: ManagedFiles, val uiSettings:UiSettings, background:BackgroundConnection? = null) {
+class AppContainer(private val store: LocalStore, private val network: MessengerNetwork, secureStore: SecureStore, files: ManagedFiles, val uiSettings:UiSettings, background:BackgroundConnection? = null, onAccountRemoved:(String)->Unit = {}) {
     internal val importScope=CoroutineScope(SupervisorJob()+Dispatchers.Default)
     val shares=store.shares(files)
     val notificationTarget=kotlinx.coroutines.flow.MutableStateFlow<Pair<String,String>?>(null)
@@ -32,7 +32,7 @@ class AppContainer(private val store: LocalStore, private val network: Messenger
         notificationTarget.value=account to chat
     }
     val shareImportError=kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
-    val runtime = AppRuntime(store,network,secureStore,files)
+    val runtime = AppRuntime(store,network,secureStore,files,onAccountRemoved)
     val sessions = runtime.sessions
     val conversations = runtime.conversations
     val transfers = runtime.transfers

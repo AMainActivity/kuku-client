@@ -30,6 +30,9 @@ import org.jetbrains.compose.resources.stringResource
     Surface(color=MaterialTheme.colorScheme.errorContainer,shape=MaterialTheme.shapes.medium,modifier=Modifier.fillMaxWidth()) {
     Column {
     Text(stringResource(when(code) {
+        "MESSAGE_TOO_LARGE" -> Res.string.message_too_large
+        "FILE_INTEGRITY_FAILED" -> Res.string.file_integrity_failed
+        "NOT_BANNED" -> Res.string.member_not_banned
         "ATTACHMENT_LIMIT" -> Res.string.capture_limit
         "FILE_OPEN_FAILED" -> Res.string.file_open_failed
         "SHARE_FILES_UNAVAILABLE" -> Res.string.share_files_unavailable

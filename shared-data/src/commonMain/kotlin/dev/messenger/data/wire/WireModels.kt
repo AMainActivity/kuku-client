@@ -7,6 +7,7 @@ import kotlin.uuid.Uuid
 const val CONTRACT_VERSION = "0.1.0"
 const val PROTOCOL_VERSION = 1
 const val MAX_SAFE_INTEGER = 9_007_199_254_740_991L
+const val MAX_TEXT_BYTES = 16_384L
 const val MAX_REQUEST_BYTES = 128 * 1024
 const val MAX_RECEIVE_BYTES = 1024 * 1024
 val wireJson = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = true }
@@ -140,7 +141,7 @@ fun String.codePointCount(): Int {
 )
 @Serializable data class Membership(val role: String, val status: String, val joinedSeq: Long, val version: Long)
 @Serializable data class Preferences(val pinned: Boolean, val pinRank: Int, val muted: Boolean, val version: Long)
-@Serializable class Chat(
+@Serializable data class Chat(
     val chatId: String, val kind: String, val title: String, val description: String, val avatarId: String?,
     val version: Long, val membership: Membership, val lastMessage: Message?, val unreadCount: Long,
     val peer: User?, val preferences: Preferences,

@@ -232,4 +232,9 @@
     <string name="changelog_010_account">Вход по email, настройки профиля и управление группами.</string>
     <string name="third_party_licenses">Библиотеки и лицензии</string>
     <string name="admin_confirmation_description">Введите код из аутентификатора, чтобы продолжить действие по администрированию сервера.</string>
+    <string name="message_too_large">Сообщение превышает допустимый размер текста на сервере. Сократите его и отправьте снова.</string>
+    <string name="file_integrity_failed">Скачанный файл повреждён. Нажмите повтор, чтобы скачать его заново.</string>
+    <string name="member_not_banned">Этот пользователь не заблокирован в группе.</string>
+    <string name="unban_choose_person">Найдите пользователя, с которого нужно снять блокировку. Здесь показан каталог пользователей, а не список заблокированных.</string>
+    <string name="unban_search_bots">Искать ботов</string>
 </resources>

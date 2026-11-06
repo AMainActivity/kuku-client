@@ -119,10 +119,13 @@ interface GroupCreation {
 interface DirectoryRepository:ChatCatalog,DirectoryCatalog,GroupCreation {
 }
 interface MessagingRepository:ChatCatalog {
+    /** Local preflight; must not perform IO or clear the composer. */
+    fun validateText(text: String)
     val error:StateFlow<String?>
     val historyGeneration:StateFlow<Long>
     suspend fun initialUnreadCursor(key:String,chatId:String):Long?
     fun observeHistoryWindow(key:String,chatId:String,lower:Long,upper:Long?,limit:Int):Flow<List<Message>>
+    suspend fun cachedHistoryPage(key:String,chatId:String,direction:String,anchor:Long?,limit:Int=50):History
     suspend fun historyPage(key:String,chatId:String,direction:String,anchor:Long?,limit:Int=50):History
     fun replyTargets(key:String,chatId:String,ids:List<String>):Flow<Map<String,Message>>
     suspend fun messageSequence(key:String,chatId:String,messageId:String):Long

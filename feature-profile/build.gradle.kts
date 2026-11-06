@@ -19,6 +19,7 @@ kotlin {
         getByName("androidHostTest").dependencies {
             implementation(libs.robolectric)
             implementation(libs.junit)
+            implementation(libs.coroutines.test)
         }
     }
 }

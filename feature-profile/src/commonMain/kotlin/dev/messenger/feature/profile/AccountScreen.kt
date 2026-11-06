@@ -38,8 +38,9 @@ fun AccountScreen(back: ()->Unit, admin: ()->Unit) {
     var name by rememberSaveable(me?.version) { mutableStateOf(me?.displayName.orEmpty()) }
     var email by rememberSaveable { mutableStateOf("") }
     var mfa by remember { mutableStateOf("") }
-    var oldCode by remember { mutableStateOf("") }
-    var newCode by remember { mutableStateOf("") }
+    var emailMfa by remember(change?.changeId) { mutableStateOf("") }
+    var oldCode by remember(change?.changeId) { mutableStateOf("") }
+    var newCode by remember(change?.changeId) { mutableStateOf("") }
     var revoke by remember { mutableStateOf<DeviceSession?>(null) }
     ActionPage(Res.string.settings,model,back) {
         SectionCard(stringResource(Res.string.appearance)) {
@@ -73,7 +74,7 @@ fun AccountScreen(back: ()->Unit, admin: ()->Unit) {
             Text(stringResource(Res.string.mfa_setup_instructions))
             SelectionContainer { Text(it.secret) }
         }
-        if(enrollment!=null) Field(mfa,{mfa=it.filter(Char::isDigit).take(6)},Res.string.authenticator_code)
+        if(enrollment!=null) Field(mfa,{mfa=it.filter { c -> c in '0'..'9' }.take(6)},Res.string.authenticator_code)
         if(enrollment!=null) PrimaryAction(Res.string.confirm_mfa,!busy && mfa.length==6) { model.confirmMfa(mfa); mfa="" }
         if(me?.role in setOf("owner","admin")) Action(Res.string.administration,!busy,admin)
         }
@@ -81,10 +82,11 @@ fun AccountScreen(back: ()->Unit, admin: ()->Unit) {
         Field(email,{email=it},Res.string.email)
         PrimaryAction(Res.string.send_codes,!busy && email.isNotBlank()) { model.changeEmail(email) }
         if(change!=null) {
-            Field(oldCode,{oldCode=it.filter(Char::isDigit).take(8)},Res.string.old_email_code)
-            Field(newCode,{newCode=it.filter(Char::isDigit).take(8)},Res.string.new_email_code)
-            PrimaryAction(Res.string.confirm_email,!busy && oldCode.length==8 && newCode.length==8) {
-                model.verifyEmail(oldCode,newCode,mfa); oldCode=""; newCode=""; mfa=""
+            Field(oldCode,{oldCode=it.filter { c -> c in '0'..'9' }.take(8)},Res.string.old_email_code)
+            Field(newCode,{newCode=it.filter { c -> c in '0'..'9' }.take(8)},Res.string.new_email_code)
+            if (me?.mfaEnabled == true) Field(emailMfa,{emailMfa=it.filter { c -> c in '0'..'9' }.take(6)},Res.string.authenticator_code)
+            PrimaryAction(Res.string.confirm_email,!busy && oldCode.length==8 && newCode.length==8 && (me?.mfaEnabled!=true || emailMfa.length==6)) {
+                model.verifyEmail(oldCode,newCode,emailMfa); emailMfa=""
             }
         }
         }

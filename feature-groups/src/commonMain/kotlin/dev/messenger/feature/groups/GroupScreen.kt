@@ -42,6 +42,7 @@ fun GroupScreen(accountKey:String,chatId:String,back:()->Unit,invite:(Boolean)->
     var editTitle by rememberSaveable {mutableStateOf("")}
     var editDescription by rememberSaveable {mutableStateOf("")}
     var menu by remember {mutableStateOf(false)}
+    var unban by remember { mutableStateOf(false) }
     var selectedId by remember {mutableStateOf<String?>(null)}
     var confirm by remember {mutableStateOf<Pair<String,()->Unit>?>(null)}
     var rankDialog by rememberSaveable {mutableStateOf(false)}
@@ -63,6 +64,7 @@ fun GroupScreen(accountKey:String,chatId:String,back:()->Unit,invite:(Boolean)->
         if(value!=null) Box {
             IconButton(onClick={menu=true}) {Icon(painterResource(Res.drawable.mui_more),stringResource(Res.string.more_actions))}
             DropdownMenu(expanded=menu,onDismissRequest={menu=false}) {
+                if(manage) DropdownMenuItem(text={Text(stringResource(Res.string.unban_member))},onClick={menu=false;unban=true})
                 if(manage) DropdownMenuItem(text={Text(stringResource(Res.string.edit))},onClick={menu=false;editTitle=value.title;editDescription=value.description;editing=true})
                 if(group && value.membership.status=="active") DropdownMenuItem(text={Text(stringResource(Res.string.leave_group))},onClick={menu=false;confirm=name to {model.leave(back)}})
                 if(!group) value.peer?.let {peer ->
@@ -114,6 +116,7 @@ fun GroupScreen(accountKey:String,chatId:String,back:()->Unit,invite:(Boolean)->
             if(busy) item(key="loading") {Box(Modifier.fillMaxWidth(),contentAlignment=Alignment.Center) {CircularProgressIndicator(Modifier.size(24.dp))}}
         }
     }
+    if (unban && manage) UnbanMemberDialog(accountKey, chatId) { unban=false }
     if(editing && value!=null && manage) AlertDialog(onDismissRequest={if(!busy) editing=false},title={Text(stringResource(Res.string.edit))},text={Column(verticalArrangement=Arrangement.spacedBy(12.dp)) {
         Field(editTitle,{editTitle=it},Res.string.group_name)
         Field(editDescription,{editDescription=it},Res.string.description)
@@ -129,7 +132,6 @@ fun GroupScreen(accountKey:String,chatId:String,back:()->Unit,invite:(Boolean)->
             if(manage && member.userId!=accountKey.substringAfter(':')) {
                 Action(Res.string.remove_member,!busy) {selectedId=null;confirm=member.displayName to {model.member(if(member.kind=="bot") MemberAction.REMOVE_BOT else MemberAction.REMOVE,member.userId)}}
                 Action(Res.string.ban_member,!busy) {selectedId=null;confirm=member.displayName to {model.member(MemberAction.BAN,member.userId)}}
-                Action(Res.string.unban_member,!busy) {model.member(MemberAction.UNBAN,member.userId);selectedId=null}
                 if(value?.membership?.role=="owner" && member.kind!="bot") {
                     Action(if(member.role=="admin") Res.string.make_member else Res.string.make_admin,!busy) {model.role(member.userId,if(member.role=="admin") "member" else "admin");selectedId=null}
                     Action(Res.string.transfer_owner,!busy) {selectedId=null;confirm=member.displayName to {model.member(MemberAction.TRANSFER_OWNER,member.userId)}}

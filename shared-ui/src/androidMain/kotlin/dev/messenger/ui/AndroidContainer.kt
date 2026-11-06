@@ -13,5 +13,5 @@ import android.content.Context
 import dev.messenger.data.*
 
 fun androidContainer(context: Context): AppContainer =
-    AppContainer(androidLocalStore(context), androidNetwork(), AndroidSecureStore(context), ManagedFiles(java.io.File(context.filesDir, "attachments").absolutePath), androidUiSettings(context), AndroidBackgroundConnection(context)).also { AndroidRuntime.container = it.runtime }
+    AppContainer(androidLocalStore(context), androidNetwork(), AndroidSecureStore(context), ManagedFiles(java.io.File(context.filesDir, "attachments").absolutePath), androidUiSettings(context), AndroidBackgroundConnection(context), onAccountRemoved={ MessageNotifications.clearAccount(context,it) }).also { AndroidRuntime.container = it.runtime }
 

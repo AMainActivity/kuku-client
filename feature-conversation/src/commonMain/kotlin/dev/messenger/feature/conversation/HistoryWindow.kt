@@ -19,6 +19,7 @@ internal class HistoryWindow(private val source:HistoryWindowSource) {
         override val recovery=combine(repository.connection.map {it.online}.distinctUntilChanged(),repository.historyGeneration) {online,generation -> online to generation}
         override val online get()=repository.connection.value.online
         override fun observe(lower:Long,upper:Long?,limit:Int)=repository.observeHistoryWindow(account,chat,lower,upper,limit)
+        override suspend fun cachedPage(direction:String,anchor:Long?,limit:Int)=repository.cachedHistoryPage(account,chat,direction,anchor,limit)
         override suspend fun page(direction:String,anchor:Long?,limit:Int)=repository.historyPage(account,chat,direction,anchor,limit)
         override suspend fun sequence(id:String)=repository.messageSequence(account,chat,id)
         override suspend fun unreadCursor()=repository.initialUnreadCursor(account,chat)
@@ -29,6 +30,8 @@ internal class HistoryWindow(private val source:HistoryWindowSource) {
     private val mutex=Mutex()
     private var rows:List<Message> = emptyList()
     private var initialized=false
+    private var initialRemotePage=true
+    private var navigationVersion=0L
     private var oldAttempt:Long?=null
     private var newAttempt:Long?=null
     val openingAnchor=MutableStateFlow<String?>(null)
@@ -41,8 +44,19 @@ internal class HistoryWindow(private val source:HistoryWindowSource) {
     val moreBefore=MutableStateFlow(true)
     private var moreAfter=true
     val history:Flow<List<Message>> = channelFlow {
+        if (!initialized) {
+            val cursor = source.unreadCursor()
+            val page = source.cachedPage(if (cursor == null) "before" else "around", cursor?.plus(1), PAGE_SIZE)
+            openingCursor.value = cursor
+            openingAnchor.value = page.items.firstOrNull()?.messageId
+            bounds.value = HistoryBounds(page.beforeSeq ?: 0, if (cursor == null) null else page.afterSeq)
+            atTail.value = cursor == null || !page.hasMoreAfter
+            rows = page.items
+            initialized = true
+            // A cached tail without the unread boundary may be shown, but must not send read ACKs yet.
+            openingReady.value = cursor == null || page.items.any { it.seq == cursor + 1 }
+        }
         launch {
-            openingReady.first {it}
             bounds.flatMapLatest { source.observe(it.lower,it.upper,CAPACITY) }.collect {
                 rows=it;if(it.isNotEmpty() && it.first().seq>bounds.value.lower) moreBefore.value=true;send(it)
             }
@@ -50,20 +64,27 @@ internal class HistoryWindow(private val source:HistoryWindowSource) {
         launch {
             source.recovery.distinctUntilChanged().collectLatest { (online,_) ->
                 oldAttempt=null;newAttempt=null
-                if(online || !initialized) runOperation {
-                    if(!initialized) {
+                if(online) runOperation {
+                    if(initialRemotePage) {
+                        val navigation=navigationVersion
+                        // Catalog snapshots do not contain our read cursor. Refresh it before
+                        // choosing the remote page, while the cached window remains visible.
+                        source.members()
                         val cursor=source.unreadCursor()
                         val page=source.page(if(cursor==null) "before" else "around",cursor?.plus(1),PAGE_SIZE)
-                        openingCursor.value=cursor
-                        openingAnchor.value=page.items.firstOrNull()?.messageId
-                        bounds.value=HistoryBounds(page.beforeSeq ?: 0,if(cursor==null) null else page.afterSeq)
-                        atTail.value=cursor==null || !page.hasMoreAfter
-                        moreBefore.value=page.hasMoreBefore;moreAfter=page.hasMoreAfter;initialized=true
+                        if (navigation==navigationVersion && (!openingReady.value || cursor!=openingCursor.value)) {
+                            openingCursor.value=cursor
+                            openingAnchor.value=page.items.firstOrNull()?.messageId
+                            bounds.value=HistoryBounds(page.beforeSeq ?: 0,if(cursor==null) null else page.afterSeq)
+                            atTail.value=cursor==null || !page.hasMoreAfter
+                        }
+                        moreBefore.value=page.hasMoreBefore;moreAfter=page.hasMoreAfter
+                        initialRemotePage=false
                         openingReady.value=true
                     } else {
                         // Revalidate only the displayed range, never all accumulated cache.
                         val current=rows
-                        var anchor=current.firstOrNull()?.seq?.minus(1)
+                        var anchor=current.firstOrNull()?.seq?.minus(1)?.takeIf { it > 0 }
                         val last=current.lastOrNull()?.seq
                         if(last!=null) do {
                             val page=source.page("after",anchor,PAGE_SIZE)
@@ -72,8 +93,8 @@ internal class HistoryWindow(private val source:HistoryWindowSource) {
                             anchor=next
                         } while(page.hasMoreAfter && next<last)
                         if(bounds.value.upper==null) source.page("before",null,PAGE_SIZE)
+                        source.members()
                     }
-                    if(online) source.members()
                 }
             }
         }
@@ -84,6 +105,11 @@ internal class HistoryWindow(private val source:HistoryWindowSource) {
         catch(cancelled:CancellationException) {throw cancelled}
         catch(failure:Exception) {error.value=failureCode(failure)}
         finally {loading.value=false}
+    }
+    fun onVisibleMessagesRead(through:Long) {
+        // Once the user reads beyond the opening boundary, a delayed refresh must
+        // not replace their reading position with a newly calculated divider.
+        if(initialRemotePage && through>(openingCursor.value ?: 0)) navigationVersion++
     }
     suspend fun viewport(nearOld:Boolean,nearNew:Boolean) {
         if(loading.value || rows.isEmpty()) return
@@ -116,20 +142,26 @@ internal class HistoryWindow(private val source:HistoryWindowSource) {
             }
         }
     }
-    suspend fun latest(onReady:()->Unit = {}) = runOperation {
+    suspend fun latest(onReady:()->Unit = {}) {
+        navigationVersion++
         // Show the local tail/outbox immediately, without waiting for the network.
         val cached=source.observe(0,null,PAGE_SIZE).first()
         bounds.value=HistoryBounds(cached.firstOrNull()?.seq ?: 0,null)
         latestAnchor.value=cached.lastOrNull()?.messageId
         atTail.value=true;oldAttempt=null;newAttempt=null
+        if (!openingReady.value) openingAnchor.value=cached.firstOrNull()?.messageId
+        openingReady.value=true
         onReady()
-        val page=source.page("before",null,PAGE_SIZE)
-        bounds.value=HistoryBounds(page.beforeSeq ?: 0,null)
-        latestAnchor.value=page.items.lastOrNull()?.messageId
-        atTail.value=true;moreBefore.value=page.hasMoreBefore;moreAfter=false
-        oldAttempt=null;newAttempt=null;initialized=true
+        runOperation {
+            val page=source.page("before",null,PAGE_SIZE)
+            bounds.value=HistoryBounds(page.beforeSeq ?: 0,null)
+            latestAnchor.value=page.items.lastOrNull()?.messageId
+            atTail.value=true;moreBefore.value=page.hasMoreBefore;moreAfter=false
+            oldAttempt=null;newAttempt=null;initialized=true
+        }
     }
     suspend fun jump(messageId:String) {
+        navigationVersion++
         // A target already in the active Room window needs only UI scrolling.
         if(rows.any {it.messageId==messageId}) {error.value=null;return}
         runOperation {
@@ -146,6 +178,10 @@ internal interface HistoryWindowSource {
     val recovery:Flow<Pair<Boolean,Long>>
     val online:Boolean
     fun observe(lower:Long,upper:Long?,limit:Int):Flow<List<Message>>
+    suspend fun cachedPage(direction:String,anchor:Long?,limit:Int):History {
+        val items=observe(0,null,limit).first()
+        return History(items,items.firstOrNull()?.seq,items.lastOrNull()?.seq,true,true)
+    }
     suspend fun page(direction:String,anchor:Long?,limit:Int):History
     suspend fun sequence(id:String):Long
     suspend fun unreadCursor():Long? = null
