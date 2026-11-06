@@ -86,5 +86,3 @@ Compose state/rememberSaveable используются для локально�
 - Release использует R8 и resource shrinking, подпись только из окружения.
 - Контрактные fixtures поставляются с клиентом; внешний контракт можно проверить через
   -PcontractDirectory=<путь>, без изменения исходников.
-
-Порядок повторного использования и приёмка релиза: [TEMPLATE_GUIDE.md](TEMPLATE_GUIDE.md).
