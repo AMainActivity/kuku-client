@@ -46,8 +46,15 @@ configurations.matching { it.name.contains("AndroidHostTest", ignoreCase = true)
 
 tasks.withType<Test>().configureEach {
     inputs.property("liveProbeHost", providers.environmentVariable("KUKU_LIVE_PROBE_HOST").orElse(""))
-    val contractDirectory = rootProject.file(providers.gradleProperty("contractDirectory").getOrElse("contracts/v0.1.0"))
-    inputs.dir(contractDirectory)
-    systemProperty("messenger.contractDirectory", contractDirectory.absolutePath)
+    val includeContractTests = providers.gradleProperty("includeContractTests")
+        .map { it.toBooleanStrict() }.getOrElse(true)
+    inputs.property("includeContractTests", includeContractTests)
+    if (includeContractTests) {
+        val contractDirectory = rootProject.file(providers.gradleProperty("contractDirectory").getOrElse("contracts/v0.1.0"))
+        inputs.dir(contractDirectory).withPropertyName("publishedContractDirectory")
+        systemProperty("messenger.contractDirectory", contractDirectory.absolutePath)
+    } else {
+        filter { excludeTestsMatching("dev.messenger.data.wire.PublishedContractTest") }
+    }
     systemProperty("messenger.schemaDirectory", project.file("schemas").absolutePath)
 }

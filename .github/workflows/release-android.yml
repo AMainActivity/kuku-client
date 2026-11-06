@@ -1,0 +1,71 @@
+name: Publish Android release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag, for example v0.1.0'
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: android-release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
+        with:
+          packages: ''
+          log-accepted-android-sdk-licenses: false
+      - uses: gradle/actions/setup-gradle@7ca78c16c887dc6c5f36fd6d0cb0f5c23d940e69 # v6
+        with:
+          cache-disabled: true
+      - name: Install compile SDK
+        shell: pwsh
+        run: |
+          $sdk = (Select-String '^androidSdkPlatform = "([0-9.]+)"' gradle/libs.versions.toml).Matches[0].Groups[1].Value
+          sdkmanager "platforms;android-$sdk"
+          if ($LASTEXITCODE -ne 0) { throw 'SDK installation failed' }
+      - name: Check, build and verify signed Android release
+        shell: pwsh
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: ./ci/release-android.ps1 -Tag $env:RELEASE_TAG -VersionCode (1000 + [int]$env:GITHUB_RUN_NUMBER)
+      - name: Save release files and R8 mapping
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-release-${{ github.run_number }}
+          path: |
+            androidApp/build/release-distribution/
+            androidApp/build/outputs/mapping/release/mapping.txt
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $assets = @(Get-ChildItem androidApp/build/release-distribution -File | Where-Object { $_.Extension -in '.apk', '.aab', '.txt' } | ForEach-Object { $_.FullName })
+          gh release create $env:RELEASE_TAG @assets --verify-tag --title "Kuku! $env:RELEASE_TAG" --notes-file androidApp/build/release-distribution/release-notes.md
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub Release publication failed; an existing release is never overwritten automatically.' }

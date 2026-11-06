@@ -23,11 +23,14 @@ class MessengerKmpPlugin : Plugin<Project> {
             else -> error("Declare an architecture policy for KMP module $moduleName")
         }
         configurations.configureEach {
+            val configurationName = name
             if (!name.contains("test",ignoreCase=true)) {
                 dependencies.all {
                     if(this is ProjectDependency && allowedProjects!=null) {
-                        require(path in allowedProjects) {
-                            "Module ${project.path} must not depend on $path; allowed: $allowedProjects"
+                        // KMP may resolve this project's own main variant through a project dependency.
+                        // That is an intra-module link, not a dependency on another architecture layer.
+                        require(path == project.path || path in allowedProjects) {
+                            "Module ${project.path} must not depend on $path in $configurationName; allowed: $allowedProjects"
                         }
                     }
                     if(moduleName.startsWith("feature-") || moduleName=="core-ui" || moduleName=="shared-domain") {

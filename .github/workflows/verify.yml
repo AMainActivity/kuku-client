@@ -33,9 +33,9 @@ jobs:
           $sdk = (Select-String '^androidSdkPlatform = "([0-9.]+)"' gradle/libs.versions.toml).Matches[0].Groups[1].Value
           sdkmanager "platforms;android-$sdk"
           if ($LASTEXITCODE -ne 0) { throw "SDK installation failed" }
-      - name: Verify debug, optimized release, all host tests and lint
+      - name: Verify Android builds, client tests and lint (no private contract)
         shell: pwsh
-        run: ./ci/check-android.ps1
+        run: ./ci/check-android.ps1 -SkipContractTests
   ios:
     runs-on: macos-15
     timeout-minutes: 60
