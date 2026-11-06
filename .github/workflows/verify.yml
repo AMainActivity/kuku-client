@@ -1,0 +1,53 @@
+name: Verify KMP client
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  android:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@7ca78c16c887dc6c5f36fd6d0cb0f5c23d940e69 # v6
+      - name: Install compile SDK
+        shell: pwsh
+        run: |
+          $sdk = (Select-String '^compileSdk = "(\d+)"' gradle/libs.versions.toml).Matches[0].Groups[1].Value
+          & "$env:ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager.bat" "platforms;android-$sdk"
+          if ($LASTEXITCODE -ne 0) { throw "SDK installation failed" }
+      - name: Verify debug, optimized release, all host tests and lint
+        shell: pwsh
+        run: ./ci/check-android.ps1
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@7ca78c16c887dc6c5f36fd6d0cb0f5c23d940e69 # v6
+      - name: Verify host and toolchains
+        run: |
+          test "$(uname -m)" = arm64
+          xcodebuild -version
+          xcrun simctl list devices available
+          sdkmanager "platforms;android-$(sed -n 's/^compileSdk = "\([0-9]*\)"/\1/p' gradle/libs.versions.toml)"
+      - name: Verify native tests and unsigned Xcode builds
+        run: sh ci/check-ios.sh

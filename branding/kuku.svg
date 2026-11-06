@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 108 108">
+  <title>Kuku! — cuckoo messenger</title>
+  <rect width="108" height="108" fill="#177E82"/>
+  <path id="bubble" fill="#F5FAF7" d="M 43 28 L 66 28 C 76 28 82 35 82 45 L 82 61 C 82 71 75 77 65 77 L 47 77 L 33 83 L 35 73 C 28 70 25 65 25 57 L 25 46 C 25 35 32 28 43 28 Z"/>
+  <path id="bird" fill="#253E50" d="M 32 68 L 44 54 C 47 51 50 49 51 45 L 51 42 C 51 35 56 32 62 34 C 67 35 69 40 69 44 L 74 47 L 68 51 C 67 61 60 67 51 67 L 38 76 L 41 66 L 32 71 Z"/>
+  <path id="beak" fill="#ECA74A" d="M 68 43 L 79 47 L 68 50 Z"/>
+  <path id="breast" fill="#DAE7E4" d="M 60 48 C 64 48 66 49 67 51 C 65 60 60 64 53 65 L 48 64 C 53 60 57 55 60 48 Z"/>
+  <path id="bar1" fill="#536F79" d="M 57 53 L 66 53 L 65 55 L 56 55 Z"/>
+  <path id="bar2" fill="#536F79" d="M 54 58 L 63 58 L 61 60 L 52 60 Z"/>
+  <path id="wing" fill="#607E87" d="M 55 49 C 57 50 56 54 53 57 C 50 61 45 63 40 64 C 45 58 48 51 55 49 Z"/>
+  <path id="eye-ring" fill="#F7C66A" d="M 65 41 C 65 42.66 63.66 44 62 44 C 60.34 44 59 42.66 59 41 C 59 39.34 60.34 38 62 38 C 63.66 38 65 39.34 65 41 Z"/>
+  <path id="eye" fill="#172F40" d="M 63.5 41 C 63.5 41.83 62.83 42.5 62 42.5 C 61.17 42.5 60.5 41.83 60.5 41 C 60.5 40.17 61.17 39.5 62 39.5 C 62.83 39.5 63.5 40.17 63.5 41 Z"/>
+</svg>

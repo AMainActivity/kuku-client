@@ -1,0 +1,65 @@
+# Gradle / Kotlin / Android build output
+.gradle/
+.kotlin/
+**/build/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.apks
+
+# Local SDK and IDE settings
+local.properties
+.idea/
+*.iml
+.vscode/
+
+# Xcode user settings and generated output
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.xcarchive/
+*.xcresult/
+*.ipa
+*.dSYM/
+
+# Local credentials and signing material
+.env
+.env.*
+!.env.example
+!.env.*.example
+keystore.properties
+signing.properties
+*.jks
+*.keystore
+*.p12
+*.p8
+*.mobileprovision
+
+# Local build / validation logs and JVM crash dumps
+*.log
+hs_err_pid*
+replay_pid*
+*.hprof
+
+# Operating system metadata
+.DS_Store
+._*
+Thumbs.db
+[Dd]esktop.ini
+
+# Local template notes
+/TEMPLATE_GUIDE.md
+/IMPLEMENTATION_AUDIT.md
+/contracts/
+
+# Private key exports and local database contents
+*.pem
+*.key
+*.pfx
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*

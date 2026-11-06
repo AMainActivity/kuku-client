@@ -1,0 +1,5 @@
+# Shell scripts must remain executable by macOS/Linux shells after a Windows checkout.
+*.sh text eol=lf
+gradlew text eol=lf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
