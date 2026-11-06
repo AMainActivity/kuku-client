@@ -11,7 +11,9 @@ import io.ktor.utils.io.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.*
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
@@ -25,6 +27,7 @@ import kotlin.uuid.Uuid
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk=[34], manifest=Config.NONE)
 class CacheAndTransferRegressionTest {
+    @get:Rule val temporaryFolder = TemporaryFolder()
     private val server=Uuid.random().toString()
     private val user=Uuid.random().toString()
     private val account=server+":"+user
@@ -120,8 +123,9 @@ class CacheAndTransferRegressionTest {
     }
     @Test fun migrationFrom13DropsRawPayloadsAndPreservesCursorAndDraft()=runBlocking<Unit> {
         val context=RuntimeEnvironment.getApplication()
-        val name="cache-safety-${Uuid.random()}.db"
-        val path=context.getDatabasePath(name).also {it.parentFile?.mkdirs()}
+        // Robolectric's dataDir includes the full test name; SQLite can exceed Windows path limits.
+        // JUnit owns a short, isolated directory and removes the database and its sidecar files.
+        val path=java.io.File(temporaryFolder.root,"migration.db")
         val schema=wireJson.parseToJsonElement(java.io.File(requireNotNull(System.getProperty("messenger.schemaDirectory")),"dev.messenger.data.MessengerDatabase/13.json").readText()).jsonObject.getValue("database").jsonObject
         val connection=androidx.sqlite.driver.bundled.BundledSQLiteDriver().open(path.absolutePath)
         try {
@@ -137,7 +141,7 @@ class CacheAndTransferRegressionTest {
             sql("INSERT INTO sync_events VALUES ('$account',77,'message.created','old deleted text')")
             sql("INSERT INTO drafts (accountId,chatId,text,revision) VALUES ('$account','$chatId','pending draft',3)")
         } finally {connection.close()}
-        val database=buildDatabase(Room.databaseBuilder<MessengerDatabase>(context,name))
+        val database=buildDatabase(Room.databaseBuilder<MessengerDatabase>(context,path.absolutePath))
         try {
             assertEquals(77L,database.conversations().syncState(account)?.cursor)
             assertEquals("pending draft",database.messages().draft(account,chatId)?.text)
@@ -145,7 +149,7 @@ class CacheAndTransferRegressionTest {
                 assertTrue(statement.step());assertEquals(0L,statement.getLong(0))
             }}
             database.transfers().link(TransferChatLink(account,chatId,Uuid.random().toString()))
-        } finally {database.close();context.deleteDatabase(name)}
+        } finally {database.close()}
     }
     @Test fun deletedMessageMustNotLeavePlaintextInUnusedEventCache()=runBlocking<Unit> {
         val database=db()
@@ -253,8 +257,9 @@ class CacheAndTransferRegressionTest {
         val chunks=AtomicInteger()
         val producer=CoroutineScope(SupervisorJob()+Dispatchers.Default)
         val stream=ByteChannel(autoFlush=true)
+        var writer:Deferred<Unit>?=null
         val network=MessengerNetwork(messengerHttpClient(MockEngine {
-            producer.launch {
+            writer=producer.async {
                 try {repeat(64) {stream.writeFully(ByteArray(65536));chunks.incrementAndGet()}}
                 finally {stream.close()}
             }
@@ -264,6 +269,15 @@ class CacheAndTransferRegressionTest {
             val part=network.downloadPart("example.com","synthetic",Uuid.random().toString(),1024,2047,"old-version")
             assertEquals(1025,part.bytes.size)
             assertTrue(chunks.get()<64,"All 4 MiB were buffered before returning a bounded 1025-byte read")
-        } finally {network.close();producer.cancel()}
+        } finally {
+            network.close()
+            producer.coroutineContext.job.cancelAndJoin()
+            // A bounded read closes the response early; observe the writer's expected shutdown
+            // here instead of leaking an uncaught exception into a subsequent runTest.
+            try {writer?.await()}
+            catch(_:ClosedWriteChannelException) {}
+            catch(_:ClosedByteChannelException) {}
+            catch(_:kotlinx.coroutines.CancellationException) {}
+        }
     }
 }

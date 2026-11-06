@@ -6,7 +6,9 @@ import dev.messenger.data.wire.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.*
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
@@ -18,6 +20,7 @@ import kotlin.uuid.Uuid
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk=[34], manifest=Config.NONE)
 class PersistenceTest {
+    @get:Rule val temporaryFolder = TemporaryFolder()
     private val account="${Uuid.random()}:${Uuid.random()}"
     private val chat=Uuid.random().toString()
     private fun db()=buildDatabase(Room.inMemoryDatabaseBuilder<MessengerDatabase>(RuntimeEnvironment.getApplication()))
@@ -122,9 +125,7 @@ class PersistenceTest {
     }
     @Test fun versionOneMigrationPreservesPendingAndDraft()=runTest {
         val context=RuntimeEnvironment.getApplication()
-        val name="migration-${Uuid.random()}.db"
-        val path=context.getDatabasePath(name)
-        path.parentFile?.mkdirs()
+        val path=File(temporaryFolder.root,"migration.db")
         val schema=Json.parseToJsonElement(File(requireNotNull(System.getProperty("messenger.schemaDirectory")),"dev.messenger.data.MessengerDatabase/1.json").readText()).jsonObject.getValue("database").jsonObject
         val connection=BundledSQLiteDriver().open(path.absolutePath)
         fun sql(value:String) { connection.prepare(value).use { it.step() } }
@@ -138,17 +139,17 @@ class PersistenceTest {
             sql("INSERT INTO drafts VALUES ('$account','$chat','preserved',42)")
             sql("INSERT INTO outbox VALUES ('$account','${Uuid.random()}','$chat','pending',1,'READY')")
         } finally { connection.close() }
-        val database=buildDatabase(Room.databaseBuilder<MessengerDatabase>(context,name))
+        val database=buildDatabase(Room.databaseBuilder<MessengerDatabase>(context,path.absolutePath))
         try {
             assertEquals("preserved",database.messages().draft(account,chat)?.text)
             assertEquals(42L,database.messages().draft(account,chat)?.revision)
             assertEquals("[]",database.messages().draft(account,chat)?.filesJson)
             assertEquals("pending",database.messages().ready(account,1).single().text)
-        } finally { database.close(); context.deleteDatabase(name) }
+        } finally { database.close() }
     }
     @Test fun cachedProfileSurvivesReopenAndIsAccountScoped()=runTest {
         val context=RuntimeEnvironment.getApplication()
-        val name="profile-${Uuid.random()}.db"
+        val name=File(temporaryFolder.root,"profile.db").absolutePath
         val other="${Uuid.random()}:${Uuid.random()}"
         val first=buildDatabase(Room.databaseBuilder<MessengerDatabase>(context,name))
         try {
@@ -161,7 +162,7 @@ class PersistenceTest {
             reopened.profiles().clear(account)
             assertNull(reopened.profiles().observe(account).first())
             assertEquals("profile-b",reopened.profiles().observe(other).first()?.json)
-        } finally { reopened.close();context.deleteDatabase(name) }
+        } finally { reopened.close() }
     }
     @Test fun historyWindowIsBoundedWithoutDeletingCachedRows()=runTest {
         val database=db()

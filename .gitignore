@@ -63,3 +63,7 @@ Thumbs.db
 *.sqlite-*
 *.sqlite3
 *.sqlite3-*
+
+# Android Studio APK export directories
+/androidApp/debug/
+/androidApp/release/

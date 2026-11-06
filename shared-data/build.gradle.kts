@@ -45,6 +45,9 @@ configurations.matching { it.name.contains("AndroidHostTest", ignoreCase = true)
 }
 
 tasks.withType<Test>().configureEach {
+    testLogging {
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+    }
     inputs.property("liveProbeHost", providers.environmentVariable("KUKU_LIVE_PROBE_HOST").orElse(""))
     val includeContractTests = providers.gradleProperty("includeContractTests")
         .map { it.toBooleanStrict() }.getOrElse(true)

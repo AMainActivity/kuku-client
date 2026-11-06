@@ -4,7 +4,9 @@ import androidx.room.Room
 import dev.messenger.domain.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
@@ -15,6 +17,7 @@ import kotlin.uuid.Uuid
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], manifest = Config.NONE)
 class LocalMessagesTest {
+    @get:Rule val temporaryFolder = TemporaryFolder()
     private val account = AccountId(Uuid.random(), Uuid.random())
     private val chatId = ChatId(Uuid.random())
     private fun memoryDb() = buildDatabase(Room.inMemoryDatabaseBuilder<MessengerDatabase>(RuntimeEnvironment.getApplication()))
@@ -67,7 +70,7 @@ class LocalMessagesTest {
 
     @Test fun pendingOperationAndDraftSurviveDatabaseReopen() = runTest {
         val context = RuntimeEnvironment.getApplication()
-        val name = "restart-${Uuid.random()}.db"
+        val name = java.io.File(temporaryFolder.root, "restart.db").absolutePath
         fun open() = buildDatabase(Room.databaseBuilder<MessengerDatabase>(context, name))
         val operationId = OperationId(Uuid.random())
         var db = open()
@@ -80,6 +83,6 @@ class LocalMessagesTest {
             val restored = RoomLocalMessages(db.messages(), account)
             assertEquals(operationId, restored.readyToSend(10).single().operationId)
             assertEquals("Unsent draft", restored.observeDraft(chatId).first()?.text)
-        } finally { db.close(); context.deleteDatabase(name) }
+        } finally { db.close() }
     }
 }
