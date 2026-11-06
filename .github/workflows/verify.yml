@@ -21,12 +21,17 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      - name: Set up Android SDK tools
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
+        with:
+          packages: ''
+          log-accepted-android-sdk-licenses: false
       - uses: gradle/actions/setup-gradle@7ca78c16c887dc6c5f36fd6d0cb0f5c23d940e69 # v6
       - name: Install compile SDK
         shell: pwsh
         run: |
-          $sdk = (Select-String '^compileSdk = "(\d+)"' gradle/libs.versions.toml).Matches[0].Groups[1].Value
-          & "$env:ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager.bat" "platforms;android-$sdk"
+          $sdk = (Select-String '^androidSdkPlatform = "([0-9.]+)"' gradle/libs.versions.toml).Matches[0].Groups[1].Value
+          sdkmanager "platforms;android-$sdk"
           if ($LASTEXITCODE -ne 0) { throw "SDK installation failed" }
       - name: Verify debug, optimized release, all host tests and lint
         shell: pwsh
@@ -42,12 +47,21 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      - name: Set up Android SDK tools
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
+        with:
+          packages: ''
+          log-accepted-android-sdk-licenses: false
       - uses: gradle/actions/setup-gradle@7ca78c16c887dc6c5f36fd6d0cb0f5c23d940e69 # v6
       - name: Verify host and toolchains
         run: |
           test "$(uname -m)" = arm64
           xcodebuild -version
           xcrun simctl list devices available
-          sdkmanager "platforms;android-$(sed -n 's/^compileSdk = "\([0-9]*\)"/\1/p' gradle/libs.versions.toml)"
+      - name: Install compile SDK
+        run: |
+          sdk=$(sed -n 's/^androidSdkPlatform = "\([0-9.]*\)"/\1/p' gradle/libs.versions.toml)
+          test -n "$sdk"
+          sdkmanager "platforms;android-$sdk"
       - name: Verify native tests and unsigned Xcode builds
         run: sh ci/check-ios.sh
