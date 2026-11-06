@@ -165,7 +165,7 @@
     <string name="admin_mfa_required">Для администрирования нужен аутентификатор и подтверждение кодом из него.</string>
     <string name="admin_step_up_required">Подтвердите доступ администратора заново свежим кодом из аутентификатора.</string>
     <string name="access_denied">У вашего аккаунта нет прав на это действие.</string>
-    <string name="admin_security_description">Подключите аутентификатор в разделе «Безопасность», затем подтвердите доступ администратора.</string>
+    <string name="admin_security_description">Для администрирования сервера подключите аутентификатор в профиле.</string>
     <string name="open_security">Открыть настройки безопасности</string>
     <string name="no_search_results">Чаты не найдены</string>
     <string name="no_chats_title">Пока нет чатов</string>
@@ -222,4 +222,5 @@
     <string name="changelog_010_connection">Автоматическое переподключение, индикаторы непрочитанных сообщений и отметки прочтения.</string>
     <string name="changelog_010_account">Вход по email, настройки профиля и управление группами.</string>
     <string name="third_party_licenses">Библиотеки и лицензии</string>
+    <string name="admin_confirmation_description">Введите код из аутентификатора, чтобы продолжить действие по администрированию сервера.</string>
 </resources>

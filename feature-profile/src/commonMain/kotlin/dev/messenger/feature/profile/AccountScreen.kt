@@ -73,9 +73,8 @@ fun AccountScreen(back: ()->Unit, admin: ()->Unit) {
             Text(stringResource(Res.string.mfa_setup_instructions))
             SelectionContainer { Text(it.secret) }
         }
-        if(enrollment!=null || me?.mfaEnabled==true) Field(mfa,{mfa=it.filter(Char::isDigit).take(6)},Res.string.authenticator_code)
+        if(enrollment!=null) Field(mfa,{mfa=it.filter(Char::isDigit).take(6)},Res.string.authenticator_code)
         if(enrollment!=null) PrimaryAction(Res.string.confirm_mfa,!busy && mfa.length==6) { model.confirmMfa(mfa); mfa="" }
-        if(me?.mfaEnabled==true) PrimaryAction(Res.string.verify_admin,!busy && mfa.length==6) { model.stepUp(mfa); mfa="" }
         if(me?.role in setOf("owner","admin")) Action(Res.string.administration,!busy,admin)
         }
         SectionCard(stringResource(Res.string.change_email)) {

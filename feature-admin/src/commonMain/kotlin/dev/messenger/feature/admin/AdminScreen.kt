@@ -33,6 +33,9 @@ fun AdminScreen(back: ()->Unit,security:()->Unit) {
     val more by model.more.collectAsStateWithLifecycle()
     val busy by model.busy.collectAsStateWithLifecycle()
     val error by model.error.collectAsStateWithLifecycle()
+    val confirmation by model.confirmation.collectAsStateWithLifecycle()
+    val confirming by model.confirming.collectAsStateWithLifecycle()
+    val confirmationError by model.confirmationError.collectAsStateWithLifecycle()
     var tab by rememberSaveable { mutableStateOf(0) }
     var query by rememberSaveable { mutableStateOf("") }
     var email by rememberSaveable { mutableStateOf("") }
@@ -46,7 +49,7 @@ fun AdminScreen(back: ()->Unit,security:()->Unit) {
     var confirm by remember { mutableStateOf<Pair<String,()->Unit>?>(null) }
     LaunchedEffect(tab) {model.load(tab,query)}
     ActionPage(Res.string.administration,model,back) {
-        if(error in setOf("MFA_REQUIRED","STEP_UP_REQUIRED")) {
+        if(error == "MFA_REQUIRED") {
             SectionCard(stringResource(Res.string.security)) {
                 Text(stringResource(Res.string.admin_security_description))
                 Button(onClick=security) {Text(stringResource(Res.string.open_security))}
@@ -110,6 +113,27 @@ fun AdminScreen(back: ()->Unit,security:()->Unit) {
         }
         }
         if(more) Action(Res.string.load_more,!busy) {model.load(tab,query,true)}
+    }
+    if (confirmation) {
+        var code by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = model::cancelConfirmation,
+            title = { Text(stringResource(Res.string.verify_admin)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(stringResource(Res.string.admin_confirmation_description))
+                    Field(code, { code = it.filter { char -> char in '0'..'9' }.take(6) }, Res.string.authenticator_code)
+                    ErrorNotice(confirmationError)
+                }
+            },
+            confirmButton = {
+                Action(Res.string.confirm, !confirming && code.length == 6) {
+                    model.confirmAccess(code)
+                    code = ""
+                }
+            },
+            dismissButton = { Action(Res.string.cancel, !confirming, model::cancelConfirmation) },
+        )
     }
     banUser?.let { user ->
         AlertDialog(onDismissRequest={banUser=null},title={Text(stringResource(Res.string.ban_user))},

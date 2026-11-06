@@ -69,7 +69,6 @@ class AccountViewModel(private val repository: ProfileRepository, val transfers:
         repository.mfaConfirm(code); mutableEnrollment.value = null
         mutableMe.value = repository.usersMe()
     }
-    fun stepUp(code: String) = action { repository.mfaStepUp(code) }
     fun changeEmail(email: String) = action { mutableEmailChange.value = repository.emailChangeStart(email) }
     fun verifyEmail(oldCode: String, newCode: String, mfa: String) = action {
         val change = requireNotNull(mutableEmailChange.value)
