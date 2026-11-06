@@ -22,32 +22,37 @@ class MessengerKmpPlugin : Plugin<Project> {
             moduleName=="shared-ui" -> null // Composition root wires all features and infrastructure.
             else -> error("Declare an architecture policy for KMP module $moduleName")
         }
-        configurations.configureEach {
-            val configurationName = name
-            if (!name.contains("test",ignoreCase=true)) {
-                dependencies.all {
-                    if(this is ProjectDependency && allowedProjects!=null) {
-                        // KMP may resolve this project's own main variant through a project dependency.
-                        // That is an intra-module link, not a dependency on another architecture layer.
-                        require(path == project.path || path in allowedProjects) {
-                            "Module ${project.path} must not depend on $path in $configurationName; allowed: $allowedProjects"
-                        }
-                    }
-                    if(moduleName.startsWith("feature-") || moduleName=="core-ui" || moduleName=="shared-domain") {
-                        require(group !in setOf("io.ktor","androidx.room","androidx.sqlite")) {
-                            "Infrastructure dependency $group:$name belongs in shared-data"
-                        }
-                    }
-                    if(moduleName=="shared-domain") {
-                        require(group?.contains("compose")!=true && group!="io.insert-koin" && group!="androidx.lifecycle") {
-                            "Domain must not depend on UI or DI frameworks: $group:$name"
+        val libs = extensions.getByType<VersionCatalogsExtension>().named("libs")
+        extensions.configure<KotlinMultiplatformExtension> {
+            // Validate declarations in production source sets, not plugin-internal metadata
+            // configurations (SwiftPM lock-file aggregation can reference every project).
+            sourceSets.configureEach {
+                if (!name.contains("test", ignoreCase = true)) {
+                    listOf(apiConfigurationName, implementationConfigurationName,
+                        compileOnlyConfigurationName, runtimeOnlyConfigurationName).forEach { configurationName ->
+                        project.configurations.named(configurationName).configure {
+                            dependencies.all {
+                                if (this is ProjectDependency && allowedProjects != null) {
+                                    require(path in allowedProjects) {
+                                        "Module ${project.path} must not depend on $path in $configurationName; allowed: $allowedProjects"
+                                    }
+                                }
+                                if (moduleName.startsWith("feature-") || moduleName == "core-ui" || moduleName == "shared-domain") {
+                                    require(group !in setOf("io.ktor", "androidx.room", "androidx.sqlite")) {
+                                        "Infrastructure dependency $group:$name belongs in shared-data ($configurationName)"
+                                    }
+                                }
+                                if (moduleName == "shared-domain") {
+                                    require(group?.contains("compose") != true && group != "io.insert-koin" &&
+                                        group != "androidx.lifecycle" && group != "org.jetbrains.androidx.lifecycle") {
+                                        "Domain must not depend on UI or DI frameworks: $group:$name ($configurationName)"
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
-        }
-        val libs = extensions.getByType<VersionCatalogsExtension>().named("libs")
-        extensions.configure<KotlinMultiplatformExtension> {
             iosArm64()
             iosSimulatorArm64()
             jvmToolchain(libs.findVersion("jdk").get().requiredVersion.toInt())
