@@ -18,7 +18,7 @@ class NavigationTest {
     @Test fun allRoutesCanRoundTripWithExplicitMultiplatformSerializers() {
         val json = Json { serializersModule = navigationConfig.serializersModule }
         val serializer = PolymorphicSerializer(NavKey::class)
-        listOf(ServerRoute, LoginRoute("example.com", 443), ChatsRoute).forEach { route ->
+        listOf(ServerRoute, LoginRoute("example.com", 443), ChatsRoute, AboutRoute, LicensesRoute).forEach { route ->
             assertEquals(route, json.decodeFromString(serializer, json.encodeToString(serializer, route)))
         }
     }

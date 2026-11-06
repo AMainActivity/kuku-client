@@ -104,7 +104,12 @@ fun App(container: AppContainer) {
                                 popIfNotRoot(stack); stack.add(ConversationRoute(it))
                             })
                         }
-                        entry<AboutRoute> { AboutScreen {popIfNotRoot(stack)} }
+                        entry<AboutRoute> { AboutScreen(back = { popIfNotRoot(stack) }, licenses = { stack.add(LicensesRoute) }) }
+                        entry<LicensesRoute> {
+                            LicensesScreen(back = { popIfNotRoot(stack) }, loadLibraries = {
+                                dev.messenger.app.resources.Res.readBytes("files/aboutlibraries.json").decodeToString()
+                            })
+                        }
                         entry<AccountRoute> { AccountScreen({ popIfNotRoot(stack) }) { stack.add(AdminRoute) } }
                         entry<AdminRoute> { AdminScreen(back={ popIfNotRoot(stack) },security={ stack.add(AccountRoute) }) }
                         entry<GroupRoute> { route -> state.account?.let { account ->

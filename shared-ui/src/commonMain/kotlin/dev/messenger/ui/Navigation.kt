@@ -22,6 +22,7 @@ import kotlinx.serialization.modules.*
 @Serializable data class ConversationRoute(val chatId: String) : NavKey
 
 @Serializable data object AboutRoute : NavKey
+@Serializable data object LicensesRoute : NavKey
 @Serializable data object AccountRoute : NavKey
 @Serializable data object AdminRoute : NavKey
 @Serializable data class GroupRoute(val chatId: String) : NavKey
@@ -32,6 +33,7 @@ val navigationConfig = SavedStateConfiguration {
         polymorphic(NavKey::class) {
             subclass(ServerRoute::class, ServerRoute.serializer())
             subclass(AboutRoute::class,AboutRoute.serializer())
+            subclass(LicensesRoute::class, LicensesRoute.serializer())
             subclass(AccountRoute::class, AccountRoute.serializer())
             subclass(AdminRoute::class, AdminRoute.serializer())
             subclass(GroupRoute::class, GroupRoute.serializer())

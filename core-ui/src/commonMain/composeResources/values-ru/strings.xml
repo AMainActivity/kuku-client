@@ -213,4 +213,13 @@
 <string name="dismiss_error">Закрыть</string>
     <string name="unread_divider">Непрочитанные сообщения</string>
     <string name="latest_messages">К последним сообщениям</string>
+    <string name="changelog_title">История изменений</string>
+    <string name="changelog_version">Версия %1$s</string>
+    <string name="changelog_initial_release">Первый выпуск</string>
+    <string name="changelog_010_chats">Личные и групповые чаты, ответы, редактирование и удаление сообщений.</string>
+    <string name="changelog_010_attachments">Фото, видео, аудио и документы с просмотром вложений.</string>
+    <string name="changelog_010_offline">Сохранённая история чатов, черновики и очередь отправки без сети.</string>
+    <string name="changelog_010_connection">Автоматическое переподключение, индикаторы непрочитанных сообщений и отметки прочтения.</string>
+    <string name="changelog_010_account">Вход по email, настройки профиля и управление группами.</string>
+    <string name="third_party_licenses">Библиотеки и лицензии</string>
 </resources>

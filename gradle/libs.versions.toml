@@ -1,4 +1,5 @@
 [versions]
+aboutLibraries = "15.3.0"
 ktor = "3.6.1"
 kotlin = "2.4.21"
 agp = "9.3.1"
@@ -29,6 +30,7 @@ robolectric = "4.17"
 junit = "4.13.2"
 
 [libraries]
+aboutlibraries-compose = { module = "com.mikepenz:aboutlibraries-compose-m3", version.ref = "aboutLibraries" }
 ktor-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
 ktor-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }
 ktor-darwin = { module = "io.ktor:ktor-client-darwin", version.ref = "ktor" }
@@ -68,6 +70,7 @@ robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectr
 junit = { module = "junit:junit", version.ref = "junit" }
 
 [plugins]
+aboutlibraries = { id = "com.mikepenz.aboutlibraries.plugin", version.ref = "aboutLibraries" }
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }

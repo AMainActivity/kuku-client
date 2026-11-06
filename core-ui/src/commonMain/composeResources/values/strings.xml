@@ -213,4 +213,13 @@
 <string name="dismiss_error">Dismiss</string>
     <string name="unread_divider">Unread messages</string>
     <string name="latest_messages">Latest messages</string>
+    <string name="changelog_title">What’s new</string>
+    <string name="changelog_version">Version %1$s</string>
+    <string name="changelog_initial_release">First release</string>
+    <string name="changelog_010_chats">Personal and group chats, replies, editing and deleting messages.</string>
+    <string name="changelog_010_attachments">Photos, videos, audio and documents with attachment viewers.</string>
+    <string name="changelog_010_offline">Saved chat history, drafts and queued messages while offline.</string>
+    <string name="changelog_010_connection">Automatic reconnection, unread message indicators and read receipts.</string>
+    <string name="changelog_010_account">Email sign-in, profile settings and group management.</string>
+    <string name="third_party_licenses">Libraries and licenses</string>
 </resources>
