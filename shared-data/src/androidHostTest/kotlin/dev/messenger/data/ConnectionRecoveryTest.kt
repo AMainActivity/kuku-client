@@ -20,13 +20,22 @@ import kotlin.uuid.Uuid
 class ConnectionRecoveryTest {
     @Test fun hintPullsJournalAndReconnectUsesCommittedCursorBeforeAck()=verifyRecovery(true)
     @Test fun closedSocketReconnectsWithoutNetworkCallback()=verifyRecovery(false)
-    private fun verifyRecovery(networkSignal:Boolean)=runBlocking {
+    @Test fun lostAckIsRecoveredFromCommittedCursor() = verifyRecovery(false, true)
+    @Test fun rateLimitedSyncRetainsLiveSessionAndRetriesOnSameSocket() = verifyRecovery(false, rateLimited=true)
+    @Test fun messageLimitPreservesOutboxWithoutTriggeringEmptySync() = verifyRecovery(false, messageLimit=true)
+    private fun verifyRecovery(networkSignal:Boolean, loseAck:Boolean=false, rateLimited:Boolean=false, messageLimit:Boolean=false)=runBlocking {
         val database=buildDatabase(Room.inMemoryDatabaseBuilder<MessengerDatabase>(RuntimeEnvironment.getApplication()))
         val owner=CoroutineScope(SupervisorJob()+Dispatchers.Default)
         val server=Uuid.random().toString(); val user=Uuid.random().toString()
         val device=Uuid.random().toString(); val session=Uuid.random().toString()
         val key="$server:$user"
+        var limited = false
+        val sends = java.util.concurrent.CopyOnWriteArrayList<Pair<Uuid?, SendParams>>()
+        val messageRejected = CompletableDeferred<Unit>()
+        val receiptSent = CompletableDeferred<Unit>()
+        val pulls = java.util.concurrent.atomic.AtomicInteger()
         val mutations=mutableListOf<Uuid?>()
+        val ackCount=java.util.concurrent.atomic.AtomicInteger()
         val committed=MutableStateFlow(-1L)
         val opened=MutableStateFlow(0)
         val remote=MutableStateFlow(0L)
@@ -54,10 +63,31 @@ class ConnectionRecoveryTest {
                             if(mutations.size==1) throw RequestTimeout(true)
                             UserBlocked(user,true)
                         }
+                        "messages.send" -> {
+                            val sent = params as SendParams
+                            sends.add(operationId to sent)
+                            if (sends.size == 1) {
+                                messageRejected.complete(Unit)
+                                throw RemoteFailure("RATE_LIMITED", true, buildJsonObject {
+                                    put("scope", "messages"); put("retryAfterSeconds", 1)
+                                })
+                            }
+                            Message(Uuid.random().toString(),sent.clientMessageId,sent.chatId,user,1,1,
+                                null,null,false,"2026-11-06T00:00:00Z",null,emptyList())
+                        }
+                        "receipts.set" -> { receiptSent.complete(Unit); ReceiptAccepted(true) }
+                        "ping" -> Pong("alive")
                         "auth.resume" -> SessionIdentity(session,user,device,server)
                         "sync.start" -> SyncStart(0,"catalog-then-replay","lazy")
                         "chats.list" -> ChatPage(emptyList(),null,"chatId")
                         "sync.pull" -> {
+                            pulls.incrementAndGet()
+                            if (rateLimited && !limited) {
+                                limited = true
+                                throw RemoteFailure("RATE_LIMITED", true, buildJsonObject {
+                                    put("scope", "sync"); put("retryAfterSeconds", 1)
+                                })
+                            }
                             val cursor=(params as SyncParams).cursor
                             if(number>1) reconnectCursor.value=cursor
                             val events=if(remote.value>cursor) listOf(SyncEvent(remote.value,"future.type",buildJsonObject { put("value","preserved") },"2100-01-01T00:00:00Z")) else emptyList()
@@ -66,6 +96,8 @@ class ConnectionRecoveryTest {
                         "sync.ack" -> {
                             val cursor=(params as AckParams).cursor
                             assertEquals(cursor,database.conversations().syncState(key)?.cursor,"ACK preceded durable page")
+                            ackCount.incrementAndGet()
+                            if (loseAck && number == 1 && cursor == 1L) throw ConnectionLost()
                             committed.value=cursor
                             Acknowledged(cursor)
                         }
@@ -82,11 +114,36 @@ class ConnectionRecoveryTest {
         try {
             sessions.restore(); repository.start()
             withTimeout(10000) { committed.first { it==0L } }
+            assertEquals(1, opened.value, "A command limit must not reconnect")
+            assertTrue(sessions.state.value.online)
+            val initialAckCount = ackCount.get()
+            repository.synchronize()
+            repository.synchronize()
+            assertEquals(initialAckCount, ackCount.get(), "Empty pages must not keep acknowledging the same cursor")
+            if (messageLimit) {
+                val before = pulls.get()
+                repository.send(key, Uuid.random().toString(), "queued")
+                withTimeout(10_000) { messageRejected.await() }
+                val pending = database.messages().observeOutbox(key).first()
+                assertEquals("READY", pending.single().state)
+                assertTrue(sessions.state.value.online)
+                assertEquals("alive", sessions.request(Commands.Ping, EmptyParams()).serverTime)
+                withTimeout(10_000) { receiptSent.await() }
+                withTimeout(10_000) { database.messages().observeOutbox(key).first { it.isEmpty() } }
+                assertEquals(2, sends.size)
+                assertEquals(sends[0].first, sends[1].first)
+                assertEquals(sends[0].second.clientMessageId, sends[1].second.clientMessageId)
+                assertEquals(wireJson.encodeToString(sends[0].second), wireJson.encodeToString(sends[1].second))
+                assertEquals(before, pulls.get(), "Outbox and receipt changes must not trigger sync")
+                assertEquals(1, opened.value)
+            }
             remote.value=1
             (channels.first().highWatermark as MutableStateFlow).value=1
             withTimeout(10000) { committed.first { it==1L } }
-            channels.first().close()
-            if(networkSignal) repository.networkAvailable()
+            if (!loseAck) {
+                channels.first().close()
+                if(networkSignal) repository.networkAvailable()
+            }
             withTimeout(10000) { reconnectCursor.first { it==1L } }
             assertEquals(2,opened.value)
             assertTrue(sessions.state.value.online)

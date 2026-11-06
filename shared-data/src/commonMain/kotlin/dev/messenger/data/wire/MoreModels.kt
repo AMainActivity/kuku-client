@@ -93,3 +93,5 @@ import kotlinx.serialization.json.JsonObject
 @Serializable data class BotUpdateParams(val userId: String, val expectedVersion: Long, val handle: String, val displayName: String, val description: String = "") {
     init { uuid(userId); require(expectedVersion >= 1); BotCreateParams(handle, displayName, description) }
 }
+
+@Serializable internal data class ReceiptUpdate(val chatId: String, val userId: String, val kind: String, val throughSeq: Long)

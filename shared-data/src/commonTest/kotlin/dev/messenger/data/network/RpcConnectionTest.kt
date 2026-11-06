@@ -24,6 +24,48 @@ class RpcConnectionTest {
         put("ok", true); put("data", data)
     }.toString()
 
+    @Test fun rateLimitKeepsSocketHintsAndHeartbeatAliveAndPreservesMutationIdentity() = runTest {
+        val socket = Socket()
+        val rpc = RpcConnection(socket, backgroundScope, Uuid.random().toString())
+        val gate = dev.messenger.data.session.RateLimitGate { currentTime }
+        val command = Command("messages.send", true, EmptyParams.serializer(), Pong.serializer())
+        val operationId = Uuid.random()
+        try {
+            val result = async { gate.run("account", command, operationId.toString()) {
+                rpc.request(command, EmptyParams(), operationId)
+            } }
+            val first = socket.sent.receive()
+            val firstJson = wireJson.parseToJsonElement(first).jsonObject
+            socket.inbound.send(buildJsonObject {
+                put("version", 1); put("type", "response"); put("requestId", firstJson.getValue("requestId"))
+                put("ok", false)
+                putJsonObject("error") {
+                    put("code", "RATE_LIMITED"); put("retryable", true)
+                    putJsonObject("details") { put("scope", "messages"); put("retryAfterSeconds", 30) }
+                }
+            }.toString())
+            runCurrent()
+            socket.inbound.send("""{"version":1,"type":"event","event":"sync.available","data":{"highWatermark":42}}""")
+            runCurrent()
+            assertEquals(42L, rpc.highWatermark.value)
+            advanceTimeBy(25_000); runCurrent()
+            val ping = socket.sent.receive()
+            assertEquals("ping", wireJson.parseToJsonElement(ping).jsonObject["command"]?.jsonPrimitive?.content)
+            socket.inbound.send(response(ping, buildJsonObject { put("serverTime", "alive") }))
+            runCurrent()
+            assertEquals(ConnectionStatus.OPEN, rpc.status.value)
+            assertFalse(socket.closed)
+            assertFalse(result.isCompleted)
+            advanceTimeBy(5000); runCurrent()
+            val repeated = socket.sent.receive()
+            val repeatedJson = wireJson.parseToJsonElement(repeated).jsonObject
+            assertEquals(firstJson["operationId"], repeatedJson["operationId"])
+            assertEquals(firstJson["params"], repeatedJson["params"])
+            assertNotEquals(firstJson["requestId"], repeatedJson["requestId"])
+            socket.inbound.send(response(repeated, buildJsonObject { put("serverTime", "sent") }))
+            assertEquals("sent", result.await().serverTime)
+        } finally { rpc.close() }
+    }
     @Test fun outOfOrderResponsesAreCorrelatedAndUnknownHintsAreHarmless() = runTest {
         val socket = Socket()
         val rpc = RpcConnection(socket, backgroundScope, Uuid.random().toString())

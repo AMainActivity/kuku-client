@@ -21,6 +21,29 @@ class PersistenceTest {
     private val account="${Uuid.random()}:${Uuid.random()}"
     private val chat=Uuid.random().toString()
     private fun db()=buildDatabase(Room.inMemoryDatabaseBuilder<MessengerDatabase>(RuntimeEnvironment.getApplication()))
+    @Test fun receiptEventsApplyAtomicallyAndCannotRollBackCachedCursors() = runTest {
+        val database = db()
+        try {
+            val dao = database.conversations()
+            val id = Uuid.random().toString()
+            val member = MemberInfo(id, "Member", "human", null, "member", "active", 1, 5, 3)
+            dao.installCatalog(account, 0, "generation")
+            dao.cacheMembers(listOf(MemberCacheEntity(account, chat, id, wireJson.encodeToString(member))))
+            fun event(cursor:Long, kind:String, through:Long) = SyncEvent(cursor, "receipt.updated",
+                buildJsonObject { put("chatId",chat);put("userId",id);put("kind",kind);put("throughSeq",through) }, "")
+            dao.applyPage(account, 0, SyncPage(listOf(event(1,"read",10),event(2,"delivered",8)),2,false,2),
+                emptyList(),emptyList(),emptySet())
+            val actual = wireJson.decodeFromString<MemberInfo>(requireNotNull(dao.member(account,chat,id)).json)
+            assertEquals(10L, actual.readSeq)
+            assertEquals(10L, actual.deliveredSeq)
+            assertEquals(2L, dao.syncState(account)?.cursor)
+            assertFailsWith<IllegalArgumentException> {
+                dao.applyPage(account,2,SyncPage(listOf(event(3,"read",-1)),3,false,3),emptyList(),emptyList(),emptySet())
+            }
+            assertEquals(2L, dao.syncState(account)?.cursor)
+            assertEquals(actual, wireJson.decodeFromString<MemberInfo>(requireNotNull(dao.member(account,chat,id)).json))
+        } finally { database.close() }
+    }
     @Test fun staleMemberRefreshCannotRollBackReceiptCursors()=runTest {
         val database=db()
         try {

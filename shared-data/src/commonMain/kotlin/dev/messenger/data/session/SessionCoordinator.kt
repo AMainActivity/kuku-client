@@ -1,5 +1,7 @@
 package dev.messenger.data.session
 
+import okio.ByteString.Companion.encodeUtf8
+
 import dev.messenger.data.network.*
 import dev.messenger.data.wire.*
 import dev.messenger.domain.ServerEndpoint
@@ -50,6 +52,7 @@ class SessionCoordinator(
     private val now: () -> Long = { Clock.System.now().toEpochMilliseconds() },
     private val onTokenRefreshed:()->Unit = {},
 ) {
+    private val rateLimits = RateLimitGate()
     private val lock = Mutex()
     private var vault: Vault? = null
     private var channel: RpcChannel? = null
@@ -238,6 +241,17 @@ class SessionCoordinator(
     }
 
     suspend fun <P, R> request(command: Command<P, R>, params: P, operationId: Uuid? = null): R {
+        if (state.value.account == null) connection()
+        val account = state.value.account ?: throw ProtocolFailure("AUTH_REQUIRED")
+        val operation = command.name + ":" + (operationId?.toString()
+            ?: wireJson.encodeToString(command.params, params).encodeUtf8().sha256().hex())
+        return rateLimits.run(account.key, command, operation) {
+            if (state.value.account != account) throw CancellationException("Account changed")
+            requestOnce(command, params, operationId)
+        }
+    }
+
+    private suspend fun <P, R> requestOnce(command: Command<P, R>, params: P, operationId: Uuid?): R {
         val connection = connection()
         try { return connection.request(command, params, operationId) }
         catch (error: Exception) {

@@ -3,6 +3,7 @@ package dev.messenger.data
 import androidx.room.*
 import dev.messenger.data.wire.*
 import kotlinx.coroutines.flow.Flow
+import kotlinx.serialization.json.decodeFromJsonElement
 
 @Entity(tableName = "chats", primaryKeys = ["accountId", "chatId"])
 data class ChatEntity(val accountId: String, val chatId: String, val json: String,
@@ -32,8 +33,8 @@ abstract class ConversationsDao {
     @Query("SELECT * FROM mutation_journal WHERE accountId=:accountId AND requestKey=:requestKey")
     abstract suspend fun mutation(accountId:String,requestKey:String):MutationEntity?
     @Insert abstract suspend fun rememberMutation(value:MutationEntity)
-    @Query("DELETE FROM mutation_journal WHERE accountId=:accountId AND requestKey=:requestKey")
-    abstract suspend fun forgetMutation(accountId:String,requestKey:String)
+    @Query("DELETE FROM mutation_journal WHERE accountId=:accountId AND requestKey=:requestKey AND operationId=:operationId")
+    abstract suspend fun forgetMutation(accountId:String,requestKey:String,operationId:String)
     @Query("DELETE FROM mutation_journal WHERE accountId=:accountId")
     protected abstract suspend fun clearMutations(accountId:String)
     @Query("SELECT * FROM receipts WHERE accountId=:accountId AND pending=1 ORDER BY operationId")
@@ -61,6 +62,8 @@ abstract class ConversationsDao {
     abstract fun observeMembers(accountId:String,chatId:String):Flow<List<MemberCacheEntity>>
     @Query("SELECT * FROM members_cache WHERE accountId=:accountId AND chatId=:chatId ORDER BY userId")
     abstract suspend fun members(accountId:String,chatId:String):List<MemberCacheEntity>
+    @Query("SELECT * FROM members_cache WHERE accountId=:accountId AND chatId=:chatId AND userId=:userId")
+    abstract suspend fun member(accountId:String, chatId:String, userId:String):MemberCacheEntity?
     @Query("DELETE FROM members_cache WHERE accountId=:accountId")
     protected abstract suspend fun clearMembers(accountId:String)
     @Query("SELECT * FROM receipts WHERE accountId=:accountId AND chatId=:chatId AND kind=:kind")
@@ -174,6 +177,18 @@ abstract class ConversationsDao {
         chats.filterNot { it.chatId in revoked }.forEach { cacheChat(accountId, it) }
         cacheMessages(accountId, messages.filterNot { it.chatId in revoked })
         messages.filterNot { it.chatId in revoked }.groupBy { it.chatId }.forEach { (chatId,items) -> advanceReceipt(accountId,chatId,"delivered",items.maxOf { it.seq }) }
+        for (event in page.items.filter { it.type == "receipt.updated" }) {
+            val update = wireJson.decodeFromJsonElement<ReceiptUpdate>(event.data)
+            if (update.chatId in revoked || update.kind !in setOf("read", "delivered")) continue
+            require(update.throughSeq >= 0)
+            val row = member(accountId, update.chatId, update.userId) ?: continue
+            val old = wireJson.decodeFromString<MemberInfo>(row.json)
+            val next = old.copy(
+                deliveredSeq = maxOf(old.deliveredSeq, update.throughSeq),
+                readSeq = if (update.kind == "read") maxOf(old.readSeq, update.throughSeq) else old.readSeq,
+            )
+            putMembers(listOf(row.copy(json = wireJson.encodeToString(next))))
+        }
         revoked.forEach { revoke(accountId, it) }
         putEvents(page.items.map { EventEntity(accountId, it.cursor, it.type, wireJson.encodeToString(it)) })
         putState(state.copy(cursor = page.nextCursor))

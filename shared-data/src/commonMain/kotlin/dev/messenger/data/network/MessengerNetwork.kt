@@ -93,9 +93,13 @@ class MessengerNetwork(private val client: HttpClient) {
 private class KtorTextSocket(private val session: DefaultClientWebSocketSession) : TextSocket {
     override suspend fun receive(): String? {
         while (true) {
-            val frame = session.incoming.receiveCatching().getOrNull()
+            val received = session.incoming.receiveCatching()
+            val frame = received.getOrNull()
             if (frame == null) {
-                if (session.closeReason.await()?.code?.toInt() == 4401) throw ProtocolFailure("AUTH_REQUIRED")
+                val reason = session.closeReason.await()
+                reportSocketClosed(reason?.code?.toInt(), reason?.message)
+                if (reason?.code?.toInt() == 4401) throw ProtocolFailure("AUTH_REQUIRED")
+                received.exceptionOrNull()?.let { throw it }
                 return null
             }
             when (frame) {
@@ -105,7 +109,9 @@ private class KtorTextSocket(private val session: DefaultClientWebSocketSession)
                 }
                 is Frame.Binary -> throw ProtocolFailure("BINARY_FRAME")
                 is Frame.Close -> {
-                    if (frame.readReason()?.code?.toInt() == 4401) throw ProtocolFailure("AUTH_REQUIRED")
+                    val reason = frame.readReason()
+                    reportSocketClosed(reason?.code?.toInt(), reason?.message)
+                    if (reason?.code?.toInt() == 4401) throw ProtocolFailure("AUTH_REQUIRED")
                     return null
                 }
                 else -> Unit

@@ -5,6 +5,7 @@ import dev.messenger.data.wire.*
 import dev.messenger.domain.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.selects.select
 import dev.messenger.data.network.ConnectionStatus
 import dev.messenger.data.network.reportConnectionFailure
 import kotlinx.coroutines.flow.*
@@ -21,7 +22,10 @@ class ConversationRepository(
     var onAccountRemoved: (suspend (String) -> Unit)? = null
     val connection = sessions.state
     private val dao = database.conversations()
-    private val lock = Mutex()
+    // Protects only local draft enqueue and mutation identity reservation; no network waits.
+    private val localWriteMutex = Mutex()
+    private var acknowledgedChannel: RpcChannel? = null
+    private var acknowledgedCursor: Long? = null
     private var worker: Job? = null
     private val mutableError = MutableStateFlow<String?>(null)
     val error = mutableError.asStateFlow()
@@ -32,11 +36,13 @@ class ConversationRepository(
 
     private val reconnectWait = ReconnectWait()
     fun networkUnavailable() { reconnectWait.networkUnavailable() }
-    fun networkAvailable() { reconnectWait.networkAvailable(); wake.trySend(Unit) }
-    private val wake = Channel<Unit>(Channel.CONFLATED)
-    fun requestCatchUp() { wake.trySend(Unit) }
+    fun networkAvailable() { reconnectWait.networkAvailable(); syncRequests.value?.wake() }
+    private val syncRequests = MutableStateFlow<SyncRequests?>(null)
+    fun requestCatchUp() { syncRequests.value?.wake() }
     fun start() {
         if (worker != null) return
+        val requests = SyncRequests()
+        syncRequests.value = requests
         worker = owner.launch {
             sessions.state.map { it.account?.key }.distinctUntilChanged().collectLatest { key ->
                 if (key == null) return@collectLatest
@@ -48,31 +54,49 @@ class ConversationRepository(
                         val connection = sessions.connection()
                         observed=connection
                         coroutineScope {
-                            launch { connection.highWatermark.filterNotNull().collect { wake.trySend(Unit) } }
-                            launch { connection.status.collect { wake.trySend(Unit) } }
-                            launch { database.messages().observeOutbox(key).distinctUntilChanged().collect { wake.trySend(Unit) } }
-                            launch { dao.observePendingReceipts(key).distinctUntilChanged().collect { wake.trySend(Unit) } }
-                            launch { database.transfers().observeCompleted(key).distinctUntilChanged().collect { wake.trySend(Unit) } }
-                            wake.trySend(Unit)
-                            while(isActive) {
-                                // A lost hint must not strand the durable journal. This is a safety check
-                                // on the same live socket, not a scheduled background connection.
-                                withTimeoutOrNull(JOURNAL_SAFETY_CHECK_MILLIS) { wake.receive() }
-                                if(connection.status.value != ConnectionStatus.OPEN) throw ConnectionLost()
-                                synchronize(key)
-                                drain(key)
+                            val outboxWake = Channel<Unit>(Channel.CONFLATED)
+                            val receiptsWake = Channel<Unit>(Channel.CONFLATED)
+                            launch { connection.highWatermark.filterNotNull().collect { requests.wake() } }
+                            launch {
+                                connection.status.first { it != ConnectionStatus.OPEN }
+                                throw ConnectionLost()
+                            }
+                            launch { database.messages().observeOutbox(key).distinctUntilChanged().collect { outboxWake.trySend(Unit) } }
+                            launch { dao.observePendingReceipts(key).distinctUntilChanged().collect { receiptsWake.trySend(Unit) } }
+                            launch { database.transfers().observeCompleted(key).distinctUntilChanged().collect { outboxWake.trySend(Unit) } }
+                            launch {
+                                while (isActive) {
+                                    outboxWake.receive()
+                                    drainOutbox(key)
+                                }
+                            }
+                            launch {
+                                while (isActive) {
+                                    receiptsWake.receive()
+                                    drainReceipts(key)
+                                }
+                            }
+                            requests.wake()
+                            while (isActive) {
+                                requests.runNext(key, JOURNAL_SAFETY_CHECK_MILLIS) { synchronizeJournal(key) }
                                 mutableError.value = null
                                 reconnectWait.connected()
                             }
-                        }                    } catch (cancelled: CancellationException) { throw cancelled }
+                        }
+                    } catch (cancelled: CancellationException) { throw cancelled }
                     catch (failure: Exception) {
                         reportConnectionFailure(failure)
-                        observed?.let {sessions.disconnect(it)}
+                        if (failure !is RemoteFailure) observed?.let { sessions.disconnect(it) }
                         mutableError.value = safeError(failure)
                         val retryAfter = (failure as? RemoteFailure)?.details?.get("retryAfterSeconds")?.jsonPrimitive?.longOrNull
                         reconnectWait.afterFailure(retryAfter)
                     }
                 }
+            }
+        }.also { job ->
+            job.invokeOnCompletion {
+                requests.close()
+                syncRequests.compareAndSet(requests, null)
             }
         }
     }
@@ -81,7 +105,23 @@ class ConversationRepository(
         check(sessions.state.value.account?.key == key) { "Account changed" }
     }
 
-    suspend fun synchronize(key: String = requireNotNull(sessions.state.value.account).key) = lock.withLock {
+    suspend fun synchronize(key: String = requireNotNull(sessions.state.value.account).key) = coroutineScope {
+        requireAccount(key)
+        val requests = syncRequests.value ?: throw ConnectionLost()
+        val pending = async { requests.request(key) }
+        val accountChanged = async { sessions.state.first { it.account?.key != key } }
+        try {
+            select<Unit> {
+                pending.onAwait { }
+                accountChanged.onAwait { throw CancellationException("Account changed") }
+            }
+        } finally {
+            pending.cancel()
+            accountChanged.cancel()
+        }
+    }
+
+    private suspend fun synchronizeJournal(key: String) {
         requireAccount(key)
         mutableSyncing.value = true
         try {
@@ -121,8 +161,15 @@ class ConversationRepository(
             val messages = mutableListOf<Message>()
             for (event in page.items) {
                 val chatId = event.data["chatId"]?.jsonPrimitive?.contentOrNull
-                if(event.type=="receipt.updated" && chatId!=null) receiptChats.add(chatId)
+
                 when {
+                    event.type == "receipt.updated" -> {
+                        val receipt = wireJson.decodeFromJsonElement<ReceiptUpdate>(event.data)
+                        if (receipt.kind in setOf("read", "delivered")) {
+                            if (dao.member(key, receipt.chatId, receipt.userId) == null) receiptChats.add(receipt.chatId)
+                            if (receipt.userId == key.substringAfter(':') && receipt.kind == "read") changed.add(receipt.chatId)
+                        }
+                    }
                     event.type == "chat.accessRevoked" -> chatId?.let { revoked.add(it) }
                     event.type == "message.created" || event.type == "message.updated" -> {
                         val message = wireJson.decodeFromJsonElement<Message>(event.data)
@@ -139,16 +186,25 @@ class ConversationRepository(
                 }
             }
             requireAccount(key)
-            for(chatId in receiptChats - revoked) loadMembers(key,chatId)
+            for (chatId in receiptChats - revoked) {
+                try { loadMembers(key, chatId) }
+                catch (failure: RemoteFailure) {
+                    if (failure.code == "CHAT_UNAVAILABLE") revoked.add(chatId) else throw failure
+                }
+            }
             dao.applyPage(key, cursor, page, chats, messages, revoked)
             // ACK is deliberately after the completed Room transaction, including unknown events.
-            sessions.request(Commands.SyncAck, AckParams(page.nextCursor))
+            val channel = sessions.connection()
+            if (acknowledgedChannel !== channel || acknowledgedCursor != page.nextCursor) {
+                sessions.request(Commands.SyncAck, AckParams(page.nextCursor))
+                acknowledgedChannel = channel
+                acknowledgedCursor = page.nextCursor
+            }
             if (page.hasMore && page.nextCursor <= cursor) throw ProtocolFailure("SYNC_CURSOR_LOOP")
         } while (page.hasMore)
     }
 
-    suspend fun flush() { sessions.state.value.account?.key?.let { drain(it) } }
-    private suspend fun drain(key: String) = lock.withLock {
+    private suspend fun drainReceipts(key: String) {
         requireAccount(key)
         for(receipt in dao.pendingReceipts(key)) {
             try {
@@ -159,6 +215,9 @@ class ConversationRepository(
                 dao.acknowledgeReceipt(key,receipt.operationId)
             }
         }
+    }
+    private suspend fun drainOutbox(key: String) {
+        requireAccount(key)
         for (pending in database.messages().waiting(key)) {
             val content = wireJson.decodeFromString<PlainContent>(requireNotNull(pending.contentJson))
             val files = content.attachmentIds.map { database.transfers().get(key,it) }
@@ -175,7 +234,7 @@ class ConversationRepository(
                     Uuid.parse(pending.operationId))
                 requireAccount(key)
                 dao.cacheMessages(key, listOf(message))
-                dao.cacheChat(key, sessions.request(Commands.ChatsGet, ChatParams(pending.chatId)))
+                // The durable journal updates the chat summary; a read cooldown must not block the next send.
             } catch (error: RemoteFailure) {
                 if (error.retryable || error.code == "UNAUTHENTICATED") throw error
                 dao.pendingState(key, pending.operationId, "FAILED")
@@ -206,23 +265,9 @@ class ConversationRepository(
     }
     fun chats(key: String): Flow<List<Chat>> = dao.observeChats(key).map { rows -> rows.map { wireJson.decodeFromString<Chat>(it.json) } }
     fun chat(key: String, chatId: String): Flow<Chat?> = dao.observeChat(key, chatId).map { it?.let { wireJson.decodeFromString<Chat>(it.json) } }
-    suspend fun loadHistory(key: String, chatId: String, older: Boolean = false): History = lock.withLock {
-        requireAccount(key)
-        val chat = sessions.request(Commands.ChatsGet, ChatParams(chatId))
-        dao.cacheChat(key, chat)
-        val result = sessions.request(Commands.MessagesHistory,
-            HistoryParams(chatId, "before", if (older) dao.oldest(key, chatId) else null, 50))
-        requireAccount(key)
-        dao.cacheMessages(key, result.items)
-        result
-    }
-    suspend fun newDirect(userId: String): Chat = lock.withLock {
-        val key = requireNotNull(sessions.state.value.account).key
-        sessions.request(Commands.ChatsDirect, DirectParams(userId), Uuid.random()).also {
-            requireAccount(key); dao.cacheChat(key, it)
-        }
-    }
-    suspend fun send(key: String, chatId: String, text: String, replyTo: String? = null, files: List<String> = emptyList()) = lock.withLock {
+    suspend fun newDirect(userId: String): Chat =
+        execute(Commands.ChatsDirect, DirectParams(userId), Uuid.random())
+    suspend fun send(key: String, chatId: String, text: String, replyTo: String? = null, files: List<String> = emptyList()) = localWriteMutex.withLock {
         requireAccount(key)
         require((text.isNotBlank() || files.isNotEmpty()) && text.codePointCount() <= 16384 && files.size <= 10)
         val local = RoomLocalMessages(database.messages(), AccountId(Uuid.parse(key.substringBefore(':')), Uuid.parse(key.substringAfter(':'))))
@@ -282,12 +327,12 @@ class ConversationRepository(
         } finally { start() }
     }
 
-    suspend fun <P, R> execute(command: Command<P, R>, params: P, operationId: Uuid? = null): R = lock.withLock {
+    suspend fun <P, R> execute(command: Command<P, R>, params: P, operationId: Uuid? = null): R {
         val key = requireNotNull(sessions.state.value.account).key
         // Persist only a digest and operation identity. OTP/TOTP commands stay ephemeral.
         val durable = command.mutation && !command.name.startsWith("auth.") && !command.name.startsWith("users.email.")
         val requestKey = if(durable) (command.name+":"+wireJson.encodeToString(command.params,params)).encodeUtf8().sha256().hex() else null
-        val stableId = if(requestKey!=null) {
+        val stableId = if(requestKey!=null) localWriteMutex.withLock {
             val existing=dao.mutation(key,requestKey)
             if(existing!=null) Uuid.parse(existing.operationId)
             else (operationId ?: Uuid.random()).also { dao.rememberMutation(MutationEntity(key,requestKey,it.toString())) }
@@ -300,8 +345,9 @@ class ConversationRepository(
             is Message -> dao.cacheMessages(key, listOf(result))
             is Items<*> -> dao.cacheMessages(key, result.items.filterIsInstance<Message>())
         }
-        if(requestKey!=null) dao.forgetMutation(key,requestKey)
-        result
+        // A late response may only acknowledge its own journal entry, never a newer operation.
+        if(requestKey!=null) dao.forgetMutation(key,requestKey,requireNotNull(stableId).toString())
+        return result
     }
 
     companion object {
