@@ -30,12 +30,21 @@ class PublishedContractTest {
             val params = request.getValue("params")
             val result = roundTripRequest(command, params,
                 request["operationId"]?.jsonPrimitive?.content?.let(Uuid::parse))
-            assertEquals(request, result, name)
+            // Explicit defaults and omitted optional fields have the same wire meaning.
+            // Check every supplied value and require any added value to match the published default.
+            assertEquals(request.filterKeys { it!="params" },result.filterKeys { it!="params" },name)
+            val encoded=result.getValue("params").jsonObject
+            params.jsonObject.forEach { (key,value) -> assertEquals(value,encoded[key],"$name.$key") }
+            (encoded.keys-params.jsonObject.keys).forEach { key ->
+                val default=publishedSchema.getValue("properties").jsonObject.getValue(key).jsonObject["default"]
+                assertNotNull(default,"No published default for $name.$key")
+                assertEquals(default,encoded[key],"$name.$key")
+            }
             validate(result, envelope, envelope)
             val schema = commands.getValue(name).jsonObject.getValue("params").jsonObject
             validate(result.getValue("params"), schema, schema)
         }
-        assertEquals(4, supportedFixtures, "Review new fixtures for client-supported commands")
+        assertEquals(7, supportedFixtures, "Review new fixtures for client-supported commands")
         val send = fixtures.single { it.jsonObject["command"]?.jsonPrimitive?.content=="messages.send" }.jsonObject["params"]?.jsonObject?.get("content")?.jsonObject
         assertEquals("Привет 👋", send?.get("text")?.jsonPrimitive?.content)
     }

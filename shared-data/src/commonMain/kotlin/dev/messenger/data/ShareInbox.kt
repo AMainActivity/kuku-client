@@ -26,10 +26,15 @@ data class ShareInboxEntity(@PrimaryKey val shareId:String,val text:String,val f
     abstract suspend fun consume(id:String)
     @Query("SELECT * FROM drafts WHERE accountId=:accountId AND chatId=:chatId")
     protected abstract suspend fun draft(accountId:String,chatId:String):DraftEntity?
+    @Query("SELECT revoked FROM chat_cache_state WHERE accountId=:accountId AND chatId=:chatId")
+    protected abstract suspend fun chatRevoked(accountId:String,chatId:String):Boolean?
     @Upsert protected abstract suspend fun putDraft(row:DraftEntity)
     @Upsert protected abstract suspend fun putTransfers(rows:List<TransferEntity>)
     @Transaction open suspend fun deliver(id:String,accountId:String,chatId:String,transfers:List<TransferEntity>) {
         val item=get(id)?.takeUnless { it.consumed } ?: return
+        // Byte copying precedes this transaction; access may have been revoked meanwhile.
+        // Reject before writing or consuming, so the same share can target another chat.
+        if(chatRevoked(accountId,chatId)==true) throw dev.messenger.domain.ApplicationFailure("CHAT_UNAVAILABLE")
         val old=draft(accountId,chatId) ?: DraftEntity(accountId,chatId,"",0)
         val previous=wireJson.decodeFromString<List<String>>(old.filesJson)
         require(previous.size+transfers.size<=10) { "SHARE_TOO_MANY_FILES" }

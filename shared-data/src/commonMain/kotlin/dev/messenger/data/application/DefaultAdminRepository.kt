@@ -7,14 +7,24 @@ import dev.messenger.domain.model.AdmissionInfo
 import dev.messenger.domain.model.AdminUser
 import dev.messenger.domain.model.AuditEntry
 import dev.messenger.data.wire.*
+import kotlinx.serialization.json.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
 internal class DefaultAdminRepository(directory:DirectoryCatalog,private val commands:RepositoryCommands):AdminRepository,DirectoryCatalog by directory {
+    override suspend fun supportsGroupDeletion():Boolean = commands.execute(Commands.ServerInfo,EmptyParams()).capabilities["groupDeletion"]?.jsonPrimitive?.booleanOrNull == true
     override suspend fun admissionsCreate(email: String):Unit {  commands.execute(MoreCommands.AdmissionsCreate,EmailParams(email)); }
     override suspend fun admissionsRevoke(email: String):Unit {  commands.execute(MoreCommands.AdmissionsRevoke,EmailParams(email)); }
     override suspend fun admissionsList(cursor: String?, limit: Int, query: String):Page<AdmissionInfo> = applicationCall { commands.execute(MoreCommands.AdmissionsList,PageParams(cursor,limit,query)).let {Page(it.items.map {row -> row.toModel()},it.nextCursor)} }
     override suspend fun adminUsersList(cursor: String?, limit: Int, query: String):Page<AdminUser> = applicationCall { commands.execute(MoreCommands.AdminUsersList,PageParams(cursor,limit,query)).let {Page(it.items.map {row -> row.toModel()},it.nextCursor)} }
+    override suspend fun adminGroupsList(cursor:String?,limit:Int,query:String):Page<dev.messenger.domain.model.AdminGroup> = applicationCall {
+        commands.execute(MoreCommands.AdminGroupsList,PageParams(cursor,limit,query)).let { page ->
+            Page(page.items.map { dev.messenger.domain.model.AdminGroup(it.chatId,it.title,it.version,it.ownerId,it.activeHumans,it.createdAt) },page.nextCursor)
+        }
+    }
+    override suspend fun adminGroupDelete(chatId:String,expectedVersion:Long,reason:String) {
+        commands.execute(MoreCommands.AdminGroupDelete,AdminGroupDeleteParams(chatId,expectedVersion,reason))
+    }
     override suspend fun adminBan(userId: String, reason: String, until: String?):Unit {  commands.execute(MoreCommands.AdminBan,BanParams(userId,reason,until)); }
     override suspend fun adminUnban(userId: String):Unit {  commands.execute(MoreCommands.AdminUnban,DirectParams(userId)); }
     override suspend fun adminDeactivate(userId: String):Unit {  commands.execute(MoreCommands.AdminDeactivate,DirectParams(userId)); }

@@ -3,7 +3,7 @@ package dev.messenger.data
 import androidx.room.*
 import dev.messenger.data.wire.*
 import kotlinx.coroutines.flow.Flow
-import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.*
 
 @Entity(tableName = "chats", primaryKeys = ["accountId", "chatId"])
 data class ChatEntity(val accountId: String, val chatId: String, val json: String,
@@ -17,7 +17,8 @@ data class SyncEntity(@PrimaryKey val accountId: String, val cursor: Long, val g
 /** Per-chat fence survives revocation and rejoining; request stamps are captured before network IO. */
 @Entity(tableName = "chat_cache_state", primaryKeys = ["accountId", "chatId"])
 data class ChatCacheState(val accountId: String, val chatId: String, val revision: Long,
-    val accessRevision: Long, val revoked: Boolean)
+    val accessRevision: Long, val revoked: Boolean,
+    @ColumnInfo(defaultValue = "NULL") val revokeReason:String? = null)
 @Entity(tableName = "catalog_stage", primaryKeys = ["accountId", "chatId"])
 data class CatalogEntity(val accountId: String, val chatId: String, val json: String)
 
@@ -44,6 +45,32 @@ abstract class ConversationsDao {
     abstract suspend fun cacheStamp(accountId: String): Long
     @Query("SELECT * FROM chat_cache_state WHERE accountId=:accountId AND chatId=:chatId")
     abstract suspend fun cacheState(accountId: String, chatId: String): ChatCacheState?
+    @Query("SELECT * FROM chat_cache_state WHERE accountId=:accountId AND revoked=1")
+    abstract fun observeRevoked(accountId:String):Flow<List<ChatCacheState>>
+    @Query("DELETE FROM drafts WHERE accountId=:accountId AND chatId=:chatId")
+    protected abstract suspend fun removeDraft(accountId:String,chatId:String)
+    @Query("DELETE FROM receipts WHERE accountId=:accountId AND chatId=:chatId")
+    protected abstract suspend fun removeReceipts(accountId:String,chatId:String)
+    @Query("DELETE FROM catalog_stage WHERE accountId=:accountId AND chatId=:chatId")
+    protected abstract suspend fun removeStagedChat(accountId:String,chatId:String)
+    @Query("DELETE FROM transfer_chat_links WHERE accountId=:accountId AND chatId=:chatId")
+    protected abstract suspend fun removeTransferLinks(accountId:String,chatId:String)
+    @Query("""
+        UPDATE transfers SET state='FAILED', error='CHAT_UNAVAILABLE'
+        WHERE accountId=:accountId
+          AND (chatId=:chatId
+            OR jobId IN (SELECT jobId FROM transfer_chat_links WHERE accountId=:accountId AND chatId=:chatId)
+            OR EXISTS (SELECT 1 FROM drafts d WHERE d.accountId=:accountId AND d.chatId=:chatId AND instr(d.filesJson,transfers.jobId)>0)
+            OR EXISTS (SELECT 1 FROM outbox o WHERE o.accountId=:accountId AND o.chatId=:chatId AND instr(o.contentJson,transfers.jobId)>0))
+          AND jobId NOT IN (SELECT jobId FROM transfer_chat_links WHERE accountId=:accountId AND chatId<>:chatId)
+          AND NOT EXISTS (SELECT 1 FROM drafts d WHERE d.accountId=:accountId AND d.chatId<>:chatId AND instr(d.filesJson,transfers.jobId)>0)
+          AND NOT EXISTS (
+            SELECT 1 FROM outbox o WHERE o.accountId=:accountId AND o.chatId<>:chatId
+              AND o.state IN ('WAITING_FOR_FILES','FAILED') AND instr(o.contentJson,transfers.jobId)>0
+              AND NOT EXISTS (SELECT 1 FROM chat_cache_state c WHERE c.accountId=o.accountId AND c.chatId=o.chatId AND c.revoked=1)
+          )
+    """)
+    protected abstract suspend fun stopChatTransfers(accountId:String,chatId:String)
     @Upsert protected abstract suspend fun putCacheState(row: ChatCacheState)
     @Query("DELETE FROM chat_cache_state WHERE accountId=:accountId")
     protected abstract suspend fun clearCacheStates(accountId: String)
@@ -242,7 +269,7 @@ abstract class ConversationsDao {
         requestStamp: Long? = null, allowRestore: Boolean = false): Boolean {
         val state = cacheState(accountId, chat.chatId)
         if (requestStamp != null && state != null && requestStamp < state.accessRevision) return false
-        if (state?.revoked == true && !allowRestore) return false
+        if (state?.revokeReason == "group_deleted" || (state?.revoked == true && !allowRestore)) return false
         chat.peer?.let { cacheUser(accountId, it) }
         val old = cachedChat(accountId, chat.chatId)?.let { wireJson.decodeFromString<Chat>(it.json) }
         val freshSnapshot = requestStamp == null || state == null || requestStamp >= state.revision
@@ -287,9 +314,16 @@ abstract class ConversationsDao {
         }
     }
     @Transaction
-    open suspend fun revoke(accountId: String, chatId: String) {
+    open suspend fun revoke(accountId: String, chatId: String, reason:String? = null) {
         val revision = cacheStamp(accountId) + 1
-        putCacheState(ChatCacheState(accountId, chatId, revision, revision, true))
+        val previousReason=cacheState(accountId,chatId)?.revokeReason
+        val permanentReason=if(previousReason=="group_deleted") previousReason else reason ?: previousReason
+        putCacheState(ChatCacheState(accountId, chatId, revision, revision, true, permanentReason))
+        stopChatTransfers(accountId,chatId)
+        removeDraft(accountId,chatId)
+        removeReceipts(accountId,chatId)
+        removeStagedChat(accountId,chatId)
+        removeTransferLinks(accountId,chatId)
         removeChat(accountId, chatId)
         removeHistory(accountId, chatId)
         removeMembers(accountId, chatId)
@@ -331,7 +365,10 @@ abstract class ConversationsDao {
             )
             putMembers(listOf(row.copy(json = wireJson.encodeToString(next))))
         }
-        revoked.forEach { revoke(accountId, it) }
+        revoked.forEach { chatId ->
+            val reason = page.items.lastOrNull { it.type == "chat.accessRevoked" && it.data["chatId"]?.jsonPrimitive?.contentOrNull == chatId }?.data?.get("reason")?.jsonPrimitive?.contentOrNull
+            revoke(accountId,chatId,reason)
+        }
         putState(state.copy(cursor = page.nextCursor))
     }
 

@@ -34,16 +34,23 @@ abstract class MessagesDao {
     abstract fun observeDraft(accountId: String, chatId: String): Flow<DraftEntity?>
     @Query("SELECT * FROM drafts WHERE accountId = :accountId AND chatId = :chatId")
     abstract suspend fun draft(accountId: String, chatId: String): DraftEntity?
+    @Query("SELECT revoked FROM chat_cache_state WHERE accountId=:accountId AND chatId=:chatId")
+    protected abstract suspend fun revoked(accountId:String,chatId:String):Boolean?
+    private suspend fun requireAccess(accountId:String,chatId:String) {
+        if(revoked(accountId,chatId)==true) throw dev.messenger.domain.ApplicationFailure("CHAT_UNAVAILABLE")
+    }
     @Upsert protected abstract suspend fun putDraft(value: DraftEntity)
 
     @Transaction
     open suspend fun saveDraft(accountId: String, chatId: String, text: String): DraftEntity {
+        requireAccess(accountId,chatId)
         val revision = (draft(accountId, chatId)?.revision ?: 0) + 1
         val old = draft(accountId, chatId)
         return DraftEntity(accountId, chatId, text, revision, old?.replyTo, old?.filesJson ?: "[]").also { putDraft(it) }
     }
 
     @Transaction open suspend fun saveExtras(accountId: String, chatId: String, replyTo: String?, filesJson: String) {
+        requireAccess(accountId,chatId)
         val old = draft(accountId,chatId) ?: DraftEntity(accountId,chatId,"",0)
         putDraft(old.copy(replyTo=replyTo,filesJson=filesJson,revision=old.revision+1))
     }
@@ -61,6 +68,7 @@ abstract class MessagesDao {
 
     @Transaction
     open suspend fun enqueue(draft: DraftEntity, operation: OutboxEntity) {
+        requireAccess(operation.accountId,operation.chatId)
         val existing = operation(operation.accountId, operation.operationId)
         if (existing != null) {
             require(existing == operation) { "Operation identity reused with a different payload" }
@@ -74,7 +82,7 @@ abstract class MessagesDao {
     }
 }
 
-@Database(entities = [DraftEntity::class, OutboxEntity::class, ChatEntity::class, MessageEntity::class, SyncEntity::class, ChatCacheState::class, TransferChatLink::class, CatalogEntity::class, TransferEntity::class, ReceiptEntity::class, MemberCacheEntity::class, MutationEntity::class, ShareInboxEntity::class, AccountProfileEntity::class, UserProfileEntity::class, MemberCacheRevisionEntity::class], version = 14, exportSchema = true, autoMigrations = [AutoMigration(from = 1, to = 2), AutoMigration(from = 2, to = 3), AutoMigration(from = 3, to = 4), AutoMigration(from = 4, to = 5), AutoMigration(from = 5, to = 6), AutoMigration(from = 6, to = 7), AutoMigration(from = 7, to = 8), AutoMigration(from = 8, to = 9), AutoMigration(from = 9, to = 10), AutoMigration(from = 10, to = 11), AutoMigration(from = 11, to = 12), AutoMigration(from = 12, to = 13)])
+@Database(entities = [DraftEntity::class, OutboxEntity::class, ChatEntity::class, MessageEntity::class, SyncEntity::class, ChatCacheState::class, TransferChatLink::class, CatalogEntity::class, TransferEntity::class, ReceiptEntity::class, MemberCacheEntity::class, MutationEntity::class, ShareInboxEntity::class, AccountProfileEntity::class, UserProfileEntity::class, MemberCacheRevisionEntity::class], version = 15, exportSchema = true, autoMigrations = [AutoMigration(from = 1, to = 2), AutoMigration(from = 2, to = 3), AutoMigration(from = 3, to = 4), AutoMigration(from = 4, to = 5), AutoMigration(from = 5, to = 6), AutoMigration(from = 6, to = 7), AutoMigration(from = 7, to = 8), AutoMigration(from = 8, to = 9), AutoMigration(from = 9, to = 10), AutoMigration(from = 10, to = 11), AutoMigration(from = 11, to = 12), AutoMigration(from = 12, to = 13), AutoMigration(from = 14, to = 15)])
 @ConstructedBy(MessengerDatabaseConstructor::class)
 abstract class MessengerDatabase : RoomDatabase() {
     abstract fun profiles(): AccountProfilesDao

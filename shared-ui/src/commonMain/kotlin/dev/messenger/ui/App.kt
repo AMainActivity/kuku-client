@@ -65,6 +65,13 @@ fun App(container: AppContainer) {
         // Account-scoped saved state cannot leak routes across login/logout.
         key(state.account?.key) {
         val stack = rememberNavBackStack(navigationConfig, if(state.account==null) ServerRoute else ChatsRoute)
+        var revokedNotice by remember {mutableStateOf<String?>(null)}
+        val accountKey=state.account?.key
+        val revokedFlow=remember(accountKey) {accountKey?.let(container.conversations::revokedChats) ?: kotlinx.coroutines.flow.flowOf(emptyMap())}
+        val revoked by revokedFlow.collectAsStateWithLifecycle(emptyMap())
+        LaunchedEffect(revoked,stack.toList()) {
+            removeRevokedChatRoutes(stack,revoked)?.let {revokedNotice=it}
+        }
         val visibleChat=(stack.lastOrNull() as? ConversationRoute)?.chatId
         DisposableEffect(container,lifecycle,state.account?.key,visibleChat) {
             fun refresh() {
@@ -89,6 +96,9 @@ fun App(container: AppContainer) {
             LocalConnectionUnavailable provides (state.account!=null && !state.online),
         ) {
         KukuTheme(dark) {
+            if(revokedNotice!=null) AlertDialog(onDismissRequest={revokedNotice=null},
+                text={Text(stringResource(if(revokedNotice=="group_deleted") Res.string.group_deleted else Res.string.chat_unavailable))},
+                confirmButton={TextButton(onClick={revokedNotice=null}) {Text(stringResource(Res.string.confirm))}})
             if(state.account!=null) IncomingShareDialog(opened={ chatId ->
                 stack.clear(); stack.add(ChatsRoute); stack.add(ConversationRoute(chatId))
             })

@@ -52,7 +52,10 @@ object MoreCommands {
     val BotsList = Command("bots.list", false, PageParams.serializer(), Page.serializer(DirectoryPerson.serializer()))
     val GroupBotAdd = Command("groups.bots.add", true, MemberParams.serializer(), GroupChanged.serializer())
     val GroupBotRemove = Command("groups.bots.remove", true, MemberParams.serializer(), GroupChanged.serializer())
-    val all = listOf(
+    val GroupDelete = Command("groups.delete",true,GroupDeleteParams.serializer(),GroupDeleted.serializer())
+    val AdminGroupDelete = Command("admin.groups.delete",true,AdminGroupDeleteParams.serializer(),GroupDeleted.serializer())
+    val AdminGroupsList = Command("admin.groups.list",false,PageParams.serializer(),Page.serializer(AdminGroup.serializer()))
+    val all = listOf(GroupDelete,AdminGroupDelete,AdminGroupsList,
         SessionsList,
         SessionsRevoke,
         MfaSetup,

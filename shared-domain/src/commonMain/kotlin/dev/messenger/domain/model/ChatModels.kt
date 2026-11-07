@@ -32,6 +32,8 @@ data class DeviceSession(val sessionId: String, val deviceId: String, val device
 
 data class AdmissionInfo(val email: String, val active: Boolean, val activatedUserId: String?, val createdAt: String)
 
+data class AdminGroup(val chatId:String,val title:String,val version:Long,val ownerId:String?,val activeHumans:Int,val createdAt:String)
+
 data class AdminUser(val userId: String, val email: String, val displayName: String, val role: String,
     val status: String, val banUntil: String?, val version: Long)
 

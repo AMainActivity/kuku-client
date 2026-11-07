@@ -30,6 +30,10 @@ import org.jetbrains.compose.resources.stringResource
     Surface(color=MaterialTheme.colorScheme.errorContainer,shape=MaterialTheme.shapes.medium,modifier=Modifier.fillMaxWidth()) {
     Column {
     Text(stringResource(when(code) {
+        "TRANSFER_GROUP_OWNERSHIP_FIRST" -> Res.string.transfer_group_first
+        "GROUP_DELETE_REQUIRED" -> Res.string.group_delete_required
+        "GROUP_NOT_EMPTY" -> Res.string.group_not_empty
+        "VERSION_CONFLICT" -> Res.string.group_version_conflict
         "MESSAGE_TOO_LARGE" -> Res.string.message_too_large
         "FILE_INTEGRITY_FAILED" -> Res.string.file_integrity_failed
         "NOT_BANNED" -> Res.string.member_not_banned

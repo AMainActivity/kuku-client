@@ -26,6 +26,10 @@ import org.koin.core.parameter.parametersOf
 @OptIn(ExperimentalMaterial3Api::class)
 fun AdminScreen(back: ()->Unit,security:()->Unit) {
     val model=koinViewModel<AdminViewModel>()
+    val groups by model.groups.collectAsStateWithLifecycle()
+    val groupDeletionSupported by model.groupDeletionSupported.collectAsStateWithLifecycle()
+    var deletingGroup by remember {mutableStateOf<AdminGroup?>(null)}
+    var deleteReason by rememberSaveable {mutableStateOf("")}
     val users by model.users.collectAsStateWithLifecycle()
     val admissions by model.admissions.collectAsStateWithLifecycle()
     val bots by model.bots.collectAsStateWithLifecycle()
@@ -56,8 +60,8 @@ fun AdminScreen(back: ()->Unit,security:()->Unit) {
             }
             return@ActionPage
         }
-        PrimaryScrollableTabRow(selectedTabIndex=tab,edgePadding=0.dp) {
-            listOf(Res.string.admissions,Res.string.users,Res.string.bots,Res.string.audit).forEachIndexed { i,label ->
+        PrimaryScrollableTabRow(selectedTabIndex=if(tab==4 && !groupDeletionSupported) 0 else tab,edgePadding=0.dp) {
+            (listOf(Res.string.admissions,Res.string.users,Res.string.bots,Res.string.audit)+if(groupDeletionSupported) listOf(Res.string.admin_groups) else emptyList()).forEachIndexed { i,label ->
                 Tab(selected=tab==i,enabled=!busy,onClick={tab=i},text={Text(stringResource(label))})
             }
         }
@@ -106,6 +110,12 @@ fun AdminScreen(back: ()->Unit,security:()->Unit) {
                     }
                 }
             }
+            4 -> groups.forEach { group ->
+                HorizontalDivider()
+                Text(group.title,style=MaterialTheme.typography.titleMedium)
+                Text(stringResource(Res.string.group_active_humans,group.activeHumans))
+                Action(Res.string.delete_group_all,!busy) {deletingGroup=group;deleteReason=""}
+            }
             else -> audit.forEach { item ->
                 Text(item.action,style=MaterialTheme.typography.titleSmall)
                 Text(item.createdAt+" · "+item.target)
@@ -113,6 +123,16 @@ fun AdminScreen(back: ()->Unit,security:()->Unit) {
         }
         }
         if(more) Action(Res.string.load_more,!busy) {model.load(tab,query,true)}
+    }
+    deletingGroup?.let { group ->
+        AlertDialog(onDismissRequest={if(!busy) deletingGroup=null},title={Text(stringResource(Res.string.delete_group_all))},
+            text={Column(verticalArrangement=Arrangement.spacedBy(12.dp)) {
+                Text(group.title);Text(stringResource(Res.string.delete_group_warning))
+                Field(deleteReason,{deleteReason=it.take(1000)},Res.string.reason)
+                ErrorNotice(error)
+            }},
+            confirmButton={Action(Res.string.confirm,!busy && deleteReason.isNotBlank()) {model.deleteGroup(group,deleteReason) {deletingGroup=null}}},
+            dismissButton={Action(Res.string.cancel,!busy) {deletingGroup=null}})
     }
     if (confirmation) {
         var code by remember { mutableStateOf("") }

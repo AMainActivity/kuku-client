@@ -46,6 +46,22 @@ val navigationConfig = SavedStateConfiguration {
     }
 }
 
+/** Remove revoked chats from the whole stack, including restored info/invitation routes. */
+internal fun removeRevokedChatRoutes(stack:MutableList<NavKey>,revoked:Map<String,String?>):String? {
+    fun chatId(route:NavKey):String? = when(route) {
+        is ConversationRoute -> route.chatId
+        is GroupRoute -> route.chatId
+        is InviteRoute -> route.chatId
+        else -> null
+    }
+    val affected=stack.mapNotNull(::chatId).filter {it in revoked}
+    if(affected.isEmpty()) return null
+    val reason=if(affected.any {revoked[it]=="group_deleted"}) "group_deleted" else "access_revoked"
+    stack.removeAll {chatId(it) in revoked}
+    if(stack.isEmpty()) stack.add(ChatsRoute)
+    return reason
+}
+
 fun popIfNotRoot(stack: MutableList<NavKey>) {
     if (stack.size > 1) stack.removeAt(stack.lastIndex)
 }

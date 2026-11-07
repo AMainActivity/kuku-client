@@ -63,6 +63,26 @@ class AdminViewModel(private val repository: AdminRepository, private val profil
         if (!mutableConfirming.value) confirmationResult?.cancel()
     }
 
+    private val mutableGroups=MutableStateFlow<List<AdminGroup>>(emptyList())
+    val groups=mutableGroups.asStateFlow()
+    private val mutableGroupDeletionSupported=MutableStateFlow(false)
+    val groupDeletionSupported=mutableGroupDeletionSupported.asStateFlow()
+
+    fun deleteGroup(group:AdminGroup,reason:String,done:()->Unit) = action {
+        try {
+            authorized {repository.adminGroupDelete(group.chatId,group.version,reason.trim())}
+            mutableGroups.value=mutableGroups.value.filterNot {it.chatId==group.chatId}
+            done()
+        } catch(failure:ApplicationFailure) {
+            if(failure.code=="VERSION_CONFLICT") {
+                done()
+                // Discard the outdated confirmation and reload before another destructive action.
+                val page=authorized {repository.adminGroupsList(query=query)}
+                mutableGroups.value=page.items;cursor=page.nextCursor;mutableMore.value=cursor!=null
+            }
+            throw failure
+        }
+    }
     private val mutableUsers = MutableStateFlow<List<AdminUser>>(emptyList())
     val users = mutableUsers.asStateFlow()
     private val mutableAdmissions = MutableStateFlow<List<AdmissionInfo>>(emptyList())
@@ -76,14 +96,20 @@ class AdminViewModel(private val repository: AdminRepository, private val profil
     private var cursor: String? = null
     private var query = ""
     fun load(tab: Int, search: String, append: Boolean = false) = action {
-        if (!append) { cursor = null; query = search; mutableUsers.value = emptyList(); mutableAdmissions.value = emptyList(); mutableBots.value = emptyList(); mutableAudit.value = emptyList() }
+        if (!append) { cursor = null; query = search; mutableUsers.value = emptyList(); mutableAdmissions.value = emptyList(); mutableBots.value = emptyList(); mutableAudit.value = emptyList(); mutableGroups.value=emptyList() }
         when (tab) {
             0 -> authorized { repository.admissionsList(cursor,30,query) }.also { mutableAdmissions.value += it.items; cursor = it.nextCursor }
             1 -> authorized { repository.adminUsersList(cursor,30,query) }.also { mutableUsers.value += it.items; cursor = it.nextCursor }
             2 -> authorized { repository.botsList(cursor,30,query) }.also { mutableBots.value += it.items; cursor = it.nextCursor }
+            4 -> {
+                mutableGroupDeletionSupported.value=repository.supportsGroupDeletion()
+                if(!mutableGroupDeletionSupported.value) throw ApplicationFailure("UNSUPPORTED_CONTRACT")
+                authorized { repository.adminGroupsList(cursor,30,query) }.also {mutableGroups.value+=it.items;cursor=it.nextCursor}
+            }
             else -> authorized { repository.adminAudit(cursor,30,query) }.also { mutableAudit.value += it.items; cursor = it.nextCursor }
         }
         mutableMore.value = cursor != null
+        if(tab!=4) mutableGroupDeletionSupported.value=repository.supportsGroupDeletion()
     }
     fun admission(email: String, active: Boolean) = action {
         (if(active) authorized { repository.admissionsCreate(email) } else authorized { repository.admissionsRevoke(email) })

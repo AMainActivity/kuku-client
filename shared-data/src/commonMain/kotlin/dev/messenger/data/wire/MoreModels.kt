@@ -23,6 +23,14 @@ import kotlinx.serialization.json.JsonObject
 @Serializable data class UserUpdated(val userId: String, val updated: Boolean)
 @Serializable data class UserBlocked(val userId: String, val blocked: Boolean)
 @Serializable data class AdmissionChanged(val email: String, val active: Boolean)
+@Serializable data class GroupDeleteParams(val chatId:String,val expectedVersion:Long,val onlyIfLastHuman:Boolean=false) {
+    init { uuid(chatId); require(expectedVersion>=1) }
+}
+@Serializable data class AdminGroupDeleteParams(val chatId:String,val expectedVersion:Long,val reason:String) {
+    init { uuid(chatId); require(expectedVersion>=1 && reason.isNotBlank() && reason.length<=1000) }
+}
+@Serializable data class GroupDeleted(val chatId:String,val deleted:Boolean,val version:Long,val deletedAt:String)
+@Serializable data class AdminGroup(val chatId:String,val title:String,val version:Long,val ownerId:String?,val activeHumans:Int,val createdAt:String)
 @Serializable data class GroupChanged(val chatId: String, val version: Long)
 @Serializable data class ReceiptAccepted(val accepted: Boolean)
 @Serializable data class EmailChange(val changeId: String, val expiresAt: String, val message: String)

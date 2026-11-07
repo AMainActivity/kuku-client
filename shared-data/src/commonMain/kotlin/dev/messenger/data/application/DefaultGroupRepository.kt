@@ -5,15 +5,20 @@ import dev.messenger.domain.model.*
 import dev.messenger.domain.model.Page
 import dev.messenger.domain.model.MemberInfo
 import dev.messenger.data.wire.*
+import kotlinx.serialization.json.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
 internal class DefaultGroupRepository(catalog:ChatCatalog,creation:GroupCreation,private val commands:RepositoryCommands):GroupRepository,ChatCatalog by catalog,GroupCreation by creation {
+    override suspend fun supportsGroupDeletion():Boolean = commands.execute(Commands.ServerInfo,EmptyParams()).capabilities["groupDeletion"]?.jsonPrimitive?.booleanOrNull == true
     override suspend fun userBlock(userId: String):Unit {  commands.execute(MoreCommands.UserBlock,DirectParams(userId)); }
     override suspend fun userUnblock(userId: String):Unit {  commands.execute(MoreCommands.UserUnblock,DirectParams(userId)); }
     override suspend fun groupUpdate(chatId: String, expectedVersion: Long, title: String, description: String, avatarId: String?):Unit {  commands.execute(MoreCommands.GroupUpdate,GroupUpdateParams(chatId,expectedVersion,title,description,avatarId)); }
     override suspend fun membersList(chatId: String, cursor: String?, limit: Int, query: String):Page<MemberInfo> = applicationCall { commands.execute(MoreCommands.MembersList,ChatPageParams(chatId,cursor,limit,query)).let {Page(it.items.map {row -> row.toModel()},it.nextCursor)} }
     override suspend fun groupAccept(chatId: String):Unit {  commands.execute(MoreCommands.GroupAccept,ChatParams(chatId)); }
+    override suspend fun groupDelete(chatId:String,expectedVersion:Long,onlyIfLastHuman:Boolean) {
+        commands.execute(MoreCommands.GroupDelete,GroupDeleteParams(chatId,expectedVersion,onlyIfLastHuman))
+    }
     override suspend fun groupLeave(chatId: String):Unit {  commands.execute(MoreCommands.GroupLeave,ChatParams(chatId)); }
     override suspend fun groupRemove(chatId: String, userId: String):Unit {  commands.execute(MoreCommands.GroupRemove,MemberParams(chatId,userId)); }
     override suspend fun groupBan(chatId: String, userId: String):Unit {  commands.execute(MoreCommands.GroupBan,MemberParams(chatId,userId)); }

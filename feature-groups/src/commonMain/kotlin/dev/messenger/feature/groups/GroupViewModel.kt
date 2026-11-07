@@ -11,6 +11,43 @@ import kotlinx.coroutines.flow.*
 import kotlin.uuid.Uuid
 
 class GroupViewModel(val accountKey: String, val chatId: String, private val repository: GroupRepository, val transfers:dev.messenger.domain.AttachmentRepository) : ActionViewModel() {
+    data class Deletion(val chatId:String,val title:String,val version:Long,val onlyIfLastHuman:Boolean)
+    private val mutableDeletion=MutableStateFlow<Deletion?>(null)
+    val deletion=mutableDeletion.asStateFlow()
+    private val mutableDeletionSupported=MutableStateFlow(false)
+    val deletionSupported=mutableDeletionSupported.asStateFlow()
+    fun cancelDeletion() { if(!busy.value) mutableDeletion.value=null }
+    fun prepareDeletion(onlyIfLastHuman:Boolean) = action {
+        if(!repository.supportsGroupDeletion()) throw ApplicationFailure("UNSUPPORTED_CONTRACT")
+        val current=repository.chatsGet(chatId)
+        if(current.membership.role!="owner" || current.membership.status!="active") throw ApplicationFailure("FORBIDDEN")
+        if(onlyIfLastHuman) {
+            var next:String?=null
+            val seen=mutableSetOf<String>()
+            do {
+                val page=repository.membersList(chatId,next,100)
+                if(page.items.any {it.kind!="bot" && it.status=="active" && it.userId!=accountKey.substringAfter(':')})
+                    throw ApplicationFailure("TRANSFER_GROUP_OWNERSHIP_FIRST")
+                next=page.nextCursor
+                if(next!=null && !seen.add(next)) throw ApplicationFailure("MEMBER_CURSOR_LOOP")
+            } while(next!=null)
+        }
+        mutableDeletion.value=Deletion(chatId,current.title,current.version,onlyIfLastHuman)
+    }
+    fun confirmDeletion() = action {
+        val request=mutableDeletion.value ?: return@action
+        try {
+            repository.groupDelete(request.chatId,request.version,request.onlyIfLastHuman)
+            mutableDeletion.value=null
+        } catch(failure:ApplicationFailure) {
+            if(failure.code in setOf("VERSION_CONFLICT","GROUP_NOT_EMPTY","FORBIDDEN")) {
+                mutableDeletion.value=null
+                // A fresh version needs a new explicit confirmation; never silently retry deletion.
+                try {repository.chatsGet(chatId)} catch(cancelled:CancellationException) {throw cancelled} catch(_:Exception) { }
+            }
+            throw failure
+        }
+    }
     val connection=repository.connection
     fun direct(userId:String,opened:(String)->Unit)=action {opened(repository.newDirect(userId).chatId)}
     val avatarJobs=transfers.observe(accountKey,chatId).map { jobs -> jobs.filter { it.purpose=="avatar" } }
@@ -38,6 +75,7 @@ class GroupViewModel(val accountKey: String, val chatId: String, private val rep
     private var cursor: String? = null
 
     fun refresh(more: Boolean = false) = action {
+        mutableDeletionSupported.value=repository.supportsGroupDeletion()
         val value=repository.chatsGet(chatId)
         if(value.kind!="group" || value.membership.status!="active") {mutableHasMore.value=false;return@action}
         if (!more) cursor = null

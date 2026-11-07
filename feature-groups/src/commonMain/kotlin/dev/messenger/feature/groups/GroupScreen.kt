@@ -29,6 +29,8 @@ import org.koin.core.parameter.parametersOf
 fun GroupScreen(accountKey:String,chatId:String,back:()->Unit,invite:(Boolean)->Unit,openChat:(String)->Unit) {
     val model=koinViewModel<GroupViewModel>(key="group:$accountKey:$chatId",parameters={parametersOf(accountKey,chatId)})
     val chat by model.chat.collectAsStateWithLifecycle()
+    val deletionSupported by model.deletionSupported.collectAsStateWithLifecycle()
+    val deletion by model.deletion.collectAsStateWithLifecycle()
     val avatar by model.avatarImage.collectAsStateWithLifecycle()
     val jobs by model.avatarJobs.collectAsStateWithLifecycle()
     val members by model.members.collectAsStateWithLifecycle()
@@ -66,7 +68,15 @@ fun GroupScreen(accountKey:String,chatId:String,back:()->Unit,invite:(Boolean)->
             DropdownMenu(expanded=menu,onDismissRequest={menu=false}) {
                 if(manage) DropdownMenuItem(text={Text(stringResource(Res.string.unban_member))},onClick={menu=false;unban=true})
                 if(manage) DropdownMenuItem(text={Text(stringResource(Res.string.edit))},onClick={menu=false;editTitle=value.title;editDescription=value.description;editing=true})
-                if(group && value.membership.status=="active") DropdownMenuItem(text={Text(stringResource(Res.string.leave_group))},onClick={menu=false;confirm=name to {model.leave(back)}})
+                if(group && value.membership.status=="active") {
+                    val owner=value.membership.role=="owner"
+                    val lastHuman=owner && !more && members.isNotEmpty() && members.none {it.kind!="bot" && it.status=="active" && it.userId!=accountKey.substringAfter(':')}
+                    DropdownMenuItem(text={Text(stringResource(if(lastHuman && deletionSupported) Res.string.leave_delete_group else Res.string.leave_group))},enabled=!busy,onClick={
+                        menu=false
+                        if(owner && deletionSupported) model.prepareDeletion(true) else confirm=name to {model.leave(back)}
+                    })
+                    if(owner && deletionSupported) DropdownMenuItem(text={Text(stringResource(Res.string.delete_group_all),color=MaterialTheme.colorScheme.error)},enabled=!busy,onClick={menu=false;model.prepareDeletion(false)})
+                }
                 if(!group) value.peer?.let {peer ->
                     DropdownMenuItem(text={Text(stringResource(Res.string.block_user))},onClick={menu=false;confirm=peer.displayName to {model.block(peer.userId,true)}})
                     DropdownMenuItem(text={Text(stringResource(Res.string.unblock_user))},onClick={menu=false;model.block(peer.userId,false)})
@@ -115,6 +125,13 @@ fun GroupScreen(accountKey:String,chatId:String,back:()->Unit,invite:(Boolean)->
             }
             if(busy) item(key="loading") {Box(Modifier.fillMaxWidth(),contentAlignment=Alignment.Center) {CircularProgressIndicator(Modifier.size(24.dp))}}
         }
+    }
+    deletion?.let { request ->
+        AlertDialog(onDismissRequest=model::cancelDeletion,
+            title={Text(stringResource(if(request.onlyIfLastHuman) Res.string.leave_delete_group else Res.string.delete_group_all))},
+            text={Column(verticalArrangement=Arrangement.spacedBy(12.dp)) {Text(request.title);Text(stringResource(Res.string.delete_group_warning));ErrorNotice(error)}},
+            confirmButton={Action(Res.string.confirm,!busy,model::confirmDeletion)},
+            dismissButton={Action(Res.string.cancel,!busy,model::cancelDeletion)})
     }
     if (unban && manage) UnbanMemberDialog(accountKey, chatId) { unban=false }
     if(editing && value!=null && manage) AlertDialog(onDismissRequest={if(!busy) editing=false},title={Text(stringResource(Res.string.edit))},text={Column(verticalArrangement=Arrangement.spacedBy(12.dp)) {

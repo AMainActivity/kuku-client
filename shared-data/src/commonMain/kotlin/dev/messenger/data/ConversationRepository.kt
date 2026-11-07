@@ -284,6 +284,7 @@ class ConversationRepository(
         }
         for (pending in database.messages().ready(key, 20)) {
             try {
+                if(dao.cacheState(key,pending.chatId)?.revoked==true) continue
                 val requestStamp = dao.cacheStamp(key)
                 val message = sessions.request(Commands.MessagesSend,
                     SendParams(pending.chatId, pending.operationId, pending.contentJson?.let { wireJson.decodeFromString<PlainContent>(it) } ?: PlainContent(pending.text), pending.replyTo),
@@ -344,6 +345,7 @@ class ConversationRepository(
         } while (cursor != null)
         return members
     }
+    fun revokedChats(key:String):Flow<Map<String,String?>> = dao.observeRevoked(key).map { rows -> rows.associate {it.chatId to it.revokeReason} }
     fun chats(key: String): Flow<List<Chat>> = dao.observeChats(key).map { rows -> rows.map { wireJson.decodeFromString<Chat>(it.json) } }
     fun chat(key: String, chatId: String): Flow<Chat?> = dao.observeChat(key, chatId).map { it?.let { wireJson.decodeFromString<Chat>(it.json) } }
     suspend fun newDirect(userId: String): Chat =
@@ -363,6 +365,7 @@ class ConversationRepository(
     suspend fun retry(key: String, operationId: String) {
         requireAccount(key)
         val row = database.messages().operation(key,operationId) ?: return
+        if(dao.cacheState(key,row.chatId)?.revoked==true) throw ApplicationFailure("CHAT_UNAVAILABLE")
         val content = row.contentJson?.let { wireJson.decodeFromString<PlainContent>(it) }
         val waiting = content?.attachmentIds?.any { database.transfers().get(key,it) != null } == true
         dao.pendingState(key, operationId, if(waiting) "WAITING_FOR_FILES" else "READY")
@@ -434,6 +437,7 @@ class ConversationRepository(
         val result = sessions.request(command, params, stableId)
         requireAccount(key)
         when (result) {
+            is GroupDeleted -> if(result.deleted) dao.revoke(key,result.chatId,"group_deleted")
             is Me -> dao.cacheMe(key, result)
             is User -> dao.cacheUser(key, result)
             is Chat -> dao.cacheChat(key, result, requestStamp = requestStamp, allowRestore = true)

@@ -68,6 +68,9 @@ interface DirectoryCatalog {
     suspend fun botsList(cursor: String? = null, limit: Int = 30, query: String = ""):Page<DirectoryPerson>
 }
 interface AdminRepository:DirectoryCatalog {
+    suspend fun supportsGroupDeletion():Boolean
+    suspend fun adminGroupsList(cursor:String?=null,limit:Int=30,query:String=""):Page<AdminGroup>
+    suspend fun adminGroupDelete(chatId:String,expectedVersion:Long,reason:String)
     suspend fun changeUser(action:UserAdminAction,userId:String)
     suspend fun admissionsCreate(email: String):Unit
     suspend fun admissionsRevoke(email: String):Unit
@@ -97,6 +100,8 @@ interface ProfileRepository {
     suspend fun emailChangeVerify(changeId: String, oldCode: String, newCode: String, mfaCode: String? = null):Unit
 }
 interface GroupRepository:ChatCatalog,GroupCreation {
+    suspend fun supportsGroupDeletion():Boolean
+    suspend fun groupDelete(chatId:String,expectedVersion:Long,onlyIfLastHuman:Boolean)
     suspend fun changeMember(action:MemberAction,chatId:String,userId:String)
     suspend fun userBlock(userId: String):Unit
     suspend fun userUnblock(userId: String):Unit
